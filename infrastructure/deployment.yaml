@@ -1,0 +1,36 @@
+# CloudFormation Git sync deployment file for stack "onward-dev-orders".
+# Git sync watches this file and the template on the main branch; merging a change here
+# (or to the template) updates the stack. Values not listed use the template defaults.
+# Requires stack onward-dev-registry and an image tagged "latest" in its repository.
+template-file-path: infrastructure/template.yaml
+
+parameters:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev
+
+  # Containers: 0.5 vCPU / 1 GB each; 2 normally (one per zone), up to 6 on busy days.
+  TaskCpu: '512'
+  TaskMemory: '1024'
+  MinTasks: '2'
+  MaxTasks: '6'
+  CpuTargetPercent: '50'
+
+  # Idle dev costs no compute: 0 tasks from 20:00, back at 07:00 Monday to Friday (Lagos time).
+  # Set to 'false' and merge before a review outside working hours.
+  OffHoursShutdown: 'true'
+  OffHoursTimezone: Africa/Lagos
+
+  # Releases: 10% of customers for 5 minutes, then everyone; old version kept 15 minutes.
+  DeploymentConfigName: CodeDeployDefault.ECSCanary10Percent5Minutes
+  BlueRetentionMinutes: '15'
+  LogRetentionDays: '14'
+
+  # Cost guardrail: monthly budget emails at 80% actual and 100% forecast spend.
+  MonthlyBudgetUsd: '150'
+  BudgetAlertEmail: sezikeyejadofils100@gmail.com
+
+tags:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev

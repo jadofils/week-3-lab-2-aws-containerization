@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics - Lab 2: image registry and keyless GitHub access. The ECR repository that
+  holds every released order-app image, and the IAM role GitHub Actions assumes with OIDC to
+  push to it. Created before the order system stack, because ECS cannot start a service
+  until an image exists. Deployed by CloudFormation Git sync from infrastructure/registry-deployment.yaml.
+
+# Reading order: Parameters -> 1 Image registry -> 2 Keyless access for GitHub Actions -> Outputs
+#
+# No long-lived credentials: GitHub receives a short-lived OIDC token per workflow run and
+# exchanges it for temporary credentials on one role that trusts only the main branch of the
+# application repository and may only push to one repository.
+
+Parameters:
+  Project:
+    Type: String
+    Default: onward
+    AllowedPattern: '^[a-z0-9-]{2,12}$'
+  Owner:
+    Type: String
+    Default: Jado Fils SEZIKEYE
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  GitHubOwner:
+    Type: String
+    Default: jadofils
+    Description: GitHub user or organization that owns the application repository.
+  AppRepository:
+    Type: String
+    Default: onward-orders-app
+    Description: Application repository whose main branch may push images.
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: An account holds one GitHub OIDC provider. Set to 'false' if it already exists.
+
+  ImagesToKeep:
+    Type: Number
+    Default: 15
+    MinValue: 5
+    Description: Released (sha-*) images kept for rollback; older ones are expired.
+
+Conditions:
+  CreateOidcProvider: !Equals
+    - !Ref CreateGitHubOidcProvider
+    - 'true'
+
+Resources:
+  # ============================================================ 1. Image registry
+  # Every tag is immutable except "latest", which marks the release the pipeline follows.
+  # Releases are deployed by image digest, so moving "latest" never changes a running version.
+  OrdersRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${Project}-${Environment}-orders'
+      ImageTagMutability: IMMUTABLE_WITH_EXCLUSION
+      ImageTagMutabilityExclusionFilters:
+        - ImageTagMutabilityExclusionFilterType: WILDCARD
+          ImageTagMutabilityExclusionFilterValue: latest
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Remove untagged layers left by replaced tags after 7 days",
+                "selection": { "tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 7 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep the last ${ImagesToKeep} released images for rollback",
+                "selection": { "tagStatus": "tagged", "tagPrefixList": ["sha-"], "countType": "imageCountMoreThan", "countNumber": ${ImagesToKeep} },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================ 2. Keyless access for GitHub Actions
+  # GitHub's OIDC issuer. AWS validates its tokens against GitHub's published keys, so no
+  # thumbprint is pinned here.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Push to this one repository only. A customer managed policy, never an inline one.
+  EcrPushPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${Project}-${Environment}-ecr-push-policy'
+      Description: Lets the application build push images to the order repository and nothing else.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SignInToRegistry
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: PushToOrderRepository
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:CompleteLayerUpload
+              - ecr:DescribeImages
+              - ecr:GetDownloadUrlForLayer
+              - ecr:InitiateLayerUpload
+              - ecr:PutImage
+              - ecr:UploadLayerPart
+            Resource: !GetAtt OrdersRepository.Arn
+
+  # Trusts only workflow runs on the main branch of the application repository.
+  # Pull requests, other branches and other repositories cannot assume it.
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-github-actions-role'
+      Description: Assumed by GitHub Actions with OIDC to push order-app images. No access keys.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOwner}/${AppRepository}:ref:refs/heads/main'
+      ManagedPolicyArns:
+        - !Ref EcrPushPolicy
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  RepositoryName:
+    Value: !Ref OrdersRepository
+    Export:
+      Name: !Sub '${Project}-${Environment}-orders-repository-name'
+  RepositoryUri:
+    Description: Where GitHub Actions pushes images and ECS pulls them from (through VPC endpoints).
+    Value: !GetAtt OrdersRepository.RepositoryUri
+    Export:
+      Name: !Sub '${Project}-${Environment}-orders-repository-uri'
+  RepositoryArn:
+    Value: !GetAtt OrdersRepository.Arn
+    Export:
+      Name: !Sub '${Project}-${Environment}-orders-repository-arn'
+  GitHubActionsRoleArn:
+    Description: Set as the AWS_ROLE_ARN variable (not a secret) in the application repository.
+    Value: !GetAtt GitHubActionsRole.Arn

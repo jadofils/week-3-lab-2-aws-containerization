@@ -1,0 +1,1390 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics - Lab 2: Delivering Order System Updates Safely. One public Application
+  Load Balancer in front of an ECS Fargate service in private subnets across two Availability
+  Zones, with no route to the internet: tasks reach ECR and CloudWatch Logs only through VPC
+  endpoints. A new image in ECR fires EventBridge, which starts CodePipeline; CodeDeploy
+  releases it blue/green with automatic rollback. Capacity follows average CPU.
+  Deployed by CloudFormation Git sync from infrastructure/deployment.yaml.
+
+# Reading order: Parameters -> 1 Network -> 2 Private connectivity -> 3 Security
+#                -> 4 Load balancer -> 5 Service and scaling -> 6 Release pipeline
+#                -> 7 Cost guardrail -> Outputs
+#
+# Requires stack onward-dev-registry (the ECR repository, imported below) and an image
+# tagged "latest" in it.
+#
+# No single failure stops the service:
+#   task dies            -> ALB stops routing to it (3 failed checks), ECS starts a replacement
+#   Availability Zone    -> ALB nodes, endpoint interfaces and tasks exist in both zones; ECS places replacements in the healthy one
+#   bad release          -> green gets traffic only when healthy; 10% canary; 5xx alarm rolls back; blue kept 15 minutes
+
+Parameters:
+  Project:
+    Type: String
+    Default: onward
+    AllowedPattern: '^[a-z0-9-]{2,12}$'
+  Owner:
+    Type: String
+    Default: Jado Fils SEZIKEYE
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+  PublicSubnetCidrA:
+    Type: String
+    Default: 10.0.0.0/24
+  PublicSubnetCidrB:
+    Type: String
+    Default: 10.0.1.0/24
+  PrivateSubnetCidrA:
+    Type: String
+    Default: 10.0.10.0/24
+  PrivateSubnetCidrB:
+    Type: String
+    Default: 10.0.11.0/24
+  S3PrefixListId:
+    Type: String
+    Default: pl-6da54004
+    AllowedPattern: '^pl-[0-9a-f]+$'
+    Description: >
+      AWS managed prefix list for S3 in this Region (eu-west-1). Tasks may send HTTPS to it to
+      download image layers through the S3 gateway endpoint. Look it up with:
+      aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.eu-west-1.s3
+
+  ApplicationPort:
+    Type: Number
+    Default: 8080
+  TaskCpu:
+    Type: String
+    Default: '512'
+    AllowedValues:
+      - '256'
+      - '512'
+      - '1024'
+    Description: Fargate CPU units per task (512 = 0.5 vCPU).
+  TaskMemory:
+    Type: String
+    Default: '1024'
+    AllowedValues:
+      - '1024'
+      - '2048'
+    Description: Fargate memory per task in MiB. The JVM uses 75% of it.
+  MinTasks:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    Description: At least one task per Availability Zone, so losing a task or a zone is not an outage.
+  MaxTasks:
+    Type: Number
+    Default: 6
+    Description: Busy days bring about 3x normal demand; 6 tasks caps peak spend.
+  CpuTargetPercent:
+    Type: Number
+    Default: 50
+    MinValue: 20
+    MaxValue: 80
+    Description: Average service CPU that target tracking keeps tasks near.
+  OffHoursShutdown:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: When 'true', the service scales to 0 tasks at 20:00 and back up at 07:00 Monday to Friday.
+  OffHoursTimezone:
+    Type: String
+    Default: Africa/Lagos
+
+  DeploymentConfigName:
+    Type: String
+    Default: CodeDeployDefault.ECSCanary10Percent5Minutes
+    AllowedValues:
+      - CodeDeployDefault.ECSCanary10Percent5Minutes
+      - CodeDeployDefault.ECSCanary10Percent15Minutes
+      - CodeDeployDefault.ECSLinear10PercentEvery1Minutes
+      - CodeDeployDefault.ECSAllAtOnce
+    Description: How CodeDeploy shifts customers from blue to green.
+  BlueRetentionMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 5
+    MaxValue: 120
+    Description: Old (blue) tasks keep running this long after a release, so a rollback is only a traffic switch.
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues:
+      - 7
+      - 14
+      - 30
+      - 90
+
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 150
+  BudgetAlertEmail:
+    Type: String
+    Default: ''
+    Description: Optional. When set, a monthly AWS budget emails this address at 80% actual and 100% forecast spend.
+
+Conditions:
+  CreateBudget: !Not
+    - !Equals
+      - !Ref BudgetAlertEmail
+      - ''
+  ShutDownOffHours: !Equals
+    - !Ref OffHoursShutdown
+    - 'true'
+
+Resources:
+  # ============================================================ 1. Network
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      # Both are required for interface endpoints' private DNS names to resolve.
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-vpc'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Serves the public subnets only: it carries customer traffic to and from the load balancer.
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-igw'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public subnets hold only the load balancer.
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !Ref PublicSubnetCidrA
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-public-a'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !Ref PublicSubnetCidrB
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-public-b'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Private subnets hold the tasks and the endpoint interfaces. Nothing here has a public IP.
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !Ref PrivateSubnetCidrA
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-private-a'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !Ref PrivateSubnetCidrB
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-private-b'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-public-rt'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  # Deliberately NO default route: no NAT gateway and no internet gateway route.
+  # The only routes are the local VPC route and the S3 gateway endpoint (section 2).
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-private-rt'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetA
+
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetB
+
+  # ============================================================ 2. Private connectivity
+  # Exactly what a Fargate task needs, and nothing more: ecr.api and ecr.dkr to pull the image,
+  # S3 for the image layers, logs for the awslogs driver. Each interface endpoint has a network
+  # interface in both private subnets, so it survives losing a zone. Private DNS makes the
+  # normal service names resolve to these private addresses.
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-ecr-api-vpce'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  EcrDockerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-ecr-dkr-vpce'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-logs-vpce'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Gateway endpoint: free, works through a route in the private route table.
+  # Its policy allows only the S3 bucket where ECR stores image layers in this Region.
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EcrImageLayersOnly
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::prod-${AWS::Region}-starport-layer-bucket/*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-s3-vpce'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================ 3. Security
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${Project}-${Environment}-orders-alb-sg'
+      GroupDescription: The only public entry point - HTTP from customers to the load balancer.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: Customers and merchants.
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Forward requests and health checks to tasks inside the VPC only.
+          IpProtocol: tcp
+          FromPort: !Ref ApplicationPort
+          ToPort: !Ref ApplicationPort
+          CidrIp: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-alb-sg'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Tasks accept the app port from the load balancer only, and may send HTTPS only to the
+  # endpoints and to S3 through the gateway endpoint. There is no admin port: tasks are
+  # replaced, never repaired, and their logs are in CloudWatch.
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${Project}-${Environment}-orders-task-sg'
+      GroupDescription: Order tasks - app port from the load balancer; HTTPS out to VPC endpoints only.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: Application traffic and health checks from the load balancer only.
+          IpProtocol: tcp
+          FromPort: !Ref ApplicationPort
+          ToPort: !Ref ApplicationPort
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+        - Description: ECR and CloudWatch Logs through the interface endpoints.
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref EndpointSecurityGroup
+        - Description: ECR image layers in S3 through the gateway endpoint.
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3PrefixListId
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-task-sg'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Endpoint interfaces only answer; they never start connections.
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${Project}-${Environment}-orders-endpoint-sg'
+      GroupDescription: VPC endpoint interfaces - HTTPS from order tasks only.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - Description: No outbound traffic (replaces the default allow-all rule).
+          IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-endpoint-sg'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # A separate rule, because the task and endpoint groups refer to each other.
+  EndpointIngressFromTasks:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EndpointSecurityGroup
+      Description: HTTPS from order tasks.
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref TaskSecurityGroup
+
+  # Used by ECS (not the app) to pull the image and write logs. AWS managed policy only.
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-task-execution-role'
+      Description: Lets ECS pull the order image from ECR and send container logs to CloudWatch.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # The app's own identity. It calls no AWS API, so it has no permissions at all.
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-task-role'
+      Description: Identity of the order app container. Deliberately has no permissions.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================ 4. Load balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-alb'
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      LoadBalancerAttributes:
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-alb'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Blue and green are identical. At any time one holds the live tasks; CodeDeploy starts the
+  # next release behind the other one and then switches the listener. Fargate tasks register
+  # by IP address.
+  BlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-blue-tg'
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: !Ref ApplicationPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      # 3 misses (about 45 s) before a task is pulled, so a task that is merely busy
+      # during a CPU spike is not mistaken for a failed one.
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: load_balancing.algorithm.type
+          Value: round_robin
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-blue-tg'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-green-tg'
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: !Ref ApplicationPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: load_balancing.algorithm.type
+          Value: round_robin
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-green-tg'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # HTTP for the lab demo. Production would add an HTTPS listener with an ACM certificate.
+  # After the first release CodeDeploy owns which target group this forwards to:
+  # do not change this listener in the template, or the live target group could be swapped back.
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup
+
+  # ============================================================ 5. Service and scaling
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${Project}-${Environment}-orders-cluster'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  ServiceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/${Environment}/orders'
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudFormation owns the shape of the task: size, roles, port, logging and environment.
+  # Each release copies the latest revision of this family and only swaps the image
+  # (section 6, Prepare). Changing a property here registers a new revision, which the next
+  # release picks up.
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-${Environment}-orders'
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: orders
+          # Only the first service creation uses "latest"; every release pins an image digest.
+          Image: !Sub
+            - '${RepositoryUri}:latest'
+            - RepositoryUri: !ImportValue
+                Fn::Sub: '${Project}-${Environment}-orders-repository-uri'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ApplicationPort
+              Protocol: tcp
+          Environment:
+            - Name: PORT
+              Value: !Ref ApplicationPort
+            - Name: JAVA_TOOL_OPTIONS
+              Value: -XX:MaxRAMPercentage=75
+            - Name: LOAD_DEMO_ENABLED
+              Value: 'true'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ServiceLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: orders
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Released by CodeDeploy (blue/green), not by ECS rolling updates.
+  # TaskDefinition names the FAMILY, not a revision: the value never changes, so CloudFormation
+  # never tries to change the task definition of a service CodeDeploy controls (it cannot).
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - TaskDefinition
+      - HttpListener
+    Properties:
+      ServiceName: !Sub '${Project}-${Environment}-orders-service'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      TaskDefinition: !Sub '${Project}-${Environment}-orders'
+      DesiredCount: !Ref MinTasks
+      DeploymentController:
+        Type: CODE_DEPLOY
+      # Time for the JVM to start before ALB health checks count.
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnetA
+            - !Ref PrivateSubnetB
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: orders
+          ContainerPort: !Ref ApplicationPort
+          TargetGroupArn: !Ref BlueTargetGroup
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Keeps MinTasks..MaxTasks running. In dev, optionally stops everything outside working hours,
+  # because Fargate charges nothing while no task runs.
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub 'service/${Cluster}/${Service.Name}'
+      MinCapacity: !Ref MinTasks
+      MaxCapacity: !Ref MaxTasks
+      ScheduledActions: !If
+        - ShutDownOffHours
+        - - ScheduledActionName: !Sub '${Project}-${Environment}-orders-off-hours-stop'
+            Schedule: cron(0 20 * * ? *)
+            Timezone: !Ref OffHoursTimezone
+            ScalableTargetAction:
+              MinCapacity: 0
+              MaxCapacity: 0
+          - ScheduledActionName: !Sub '${Project}-${Environment}-orders-office-hours-start'
+            Schedule: cron(0 7 ? * MON-FRI *)
+            Timezone: !Ref OffHoursTimezone
+            ScalableTargetAction:
+              MinCapacity: !Ref MinTasks
+              MaxCapacity: !Ref MaxTasks
+        - !Ref AWS::NoValue
+
+  # Adds tasks when average CPU rises above the target and removes them when it falls.
+  CpuTargetTrackingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${Project}-${Environment}-orders-cpu-target'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref CpuTargetPercent
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 120
+
+  # ============================================================ 6. Release pipeline
+  # ECR push (latest) -> EventBridge -> CodePipeline: Source -> Prepare -> Deploy (CodeDeploy blue/green)
+
+  # Errors from tasks during a release roll it back automatically (CodeDeploy watches this alarm).
+  TargetErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${Project}-${Environment}-orders-5xx-alarm'
+      AlarmDescription: Order tasks are returning server errors. Stops and rolls back a release in progress.
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # Pipeline artifacts (image details, task definition, appspec). Private, encrypted, short-lived.
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${Project}-${Environment}-orders-artifacts-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # A resource policy on the bucket (not an IAM inline policy): refuse unencrypted connections.
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub '${ArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # --- CodeDeploy: blue/green with canary, alarm rollback and a blue retention window
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-codedeploy-role'
+      Description: Lets CodeDeploy create task sets, switch the listener and watch the rollback alarm.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AWSCodeDeployRoleForECS'
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub '${Project}-${Environment}-orders-deploy'
+      ComputePlatform: ECS
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub '${Project}-${Environment}-orders-dg'
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentConfigName: !Ref DeploymentConfigName
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      BlueGreenDeploymentConfiguration:
+        # Shift as soon as green is healthy; no manual approval (merging is the only manual step).
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+          WaitTimeInMinutes: 0
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: !Ref BlueRetentionMinutes
+      ECSServices:
+        - ClusterName: !Ref Cluster
+          ServiceName: !GetAtt Service.Name
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - ProdTrafficRoute:
+              ListenerArns:
+                - !Ref HttpListener
+            TargetGroups:
+              - Name: !GetAtt BlueTargetGroup.TargetGroupName
+              - Name: !GetAtt GreenTargetGroup.TargetGroupName
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events:
+          - DEPLOYMENT_FAILURE
+          - DEPLOYMENT_STOP_ON_ALARM
+          - DEPLOYMENT_STOP_ON_REQUEST
+      AlarmConfiguration:
+        Enabled: true
+        Alarms:
+          - Name: !Ref TargetErrorsAlarm
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # --- Prepare: turn the latest task definition revision into the files CodeDeploy needs
+  PrepareLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/${Environment}/orders-prepare'
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  PreparePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${Project}-${Environment}-orders-prepare-policy'
+      Description: Read the order task definition, use the artifact bucket and write build logs.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadTaskDefinition
+            Effect: Allow
+            Action: ecs:DescribeTaskDefinition
+            Resource: '*'
+          - Sid: PipelineArtifacts
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource: !Sub '${ArtifactBucket.Arn}/*'
+          - Sid: BuildLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub '${PrepareLogGroup.Arn}:*'
+
+  PrepareRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-prepare-role'
+      Description: Used by the CodeBuild project that prepares each release for CodeDeploy.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref PreparePolicy
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Copies the latest registered revision of the task family (CloudFormation's settings, or the
+  # last release), replaces the image with <IMAGE1_NAME> for CodeDeploy to fill with the new
+  # image digest, and writes the appspec that names the container and port.
+  PrepareProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-prepare'
+      Description: Writes taskdef.json and appspec.yaml for the CodeDeploy blue/green action.
+      ServiceRole: !GetAtt PrepareRole.Arn
+      TimeoutInMinutes: 10
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: TASK_FAMILY
+            Value: !Sub '${Project}-${Environment}-orders'
+          - Name: CONTAINER_NAME
+            Value: orders
+          - Name: CONTAINER_PORT
+            Value: !Ref ApplicationPort
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref PrepareLogGroup
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query taskDefinition > current.json
+                - |
+                  python3 - <<'PY'
+                  import json, os
+                  td = json.load(open("current.json"))
+                  for key in ("taskDefinitionArn", "revision", "status", "requiresAttributes",
+                              "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"):
+                      td.pop(key, None)
+                  name = os.environ["CONTAINER_NAME"]
+                  for container in td["containerDefinitions"]:
+                      if container["name"] == name:
+                          container["image"] = "<IMAGE1_NAME>"
+                  json.dump(td, open("taskdef.json", "w"), indent=2)
+                  open("appspec.yaml", "w").write(
+                      "version: 0.0\n"
+                      "Resources:\n"
+                      "  - TargetService:\n"
+                      "      Type: AWS::ECS::Service\n"
+                      "      Properties:\n"
+                      "        TaskDefinition: <TASK_DEFINITION>\n"
+                      "        LoadBalancerInfo:\n"
+                      f"          ContainerName: \"{name}\"\n"
+                      f"          ContainerPort: {os.environ['CONTAINER_PORT']}\n")
+                  PY
+                - cat taskdef.json appspec.yaml
+          artifacts:
+            files:
+              - taskdef.json
+              - appspec.yaml
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # --- CodePipeline (V2: billed per action-minute, supports stage rollback)
+  PipelinePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${Project}-${Environment}-orders-pipeline-policy'
+      Description: Run the order release pipeline - read the image, run Prepare, deploy with CodeDeploy.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PipelineArtifacts
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+              - s3:GetBucketVersioning
+              - s3:GetBucketLocation
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub '${ArtifactBucket.Arn}/*'
+          - Sid: SourceImage
+            Effect: Allow
+            Action: ecr:DescribeImages
+            Resource: !ImportValue
+              Fn::Sub: '${Project}-${Environment}-orders-repository-arn'
+          - Sid: RunPrepare
+            Effect: Allow
+            Action:
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuilds
+            Resource: !GetAtt PrepareProject.Arn
+          - Sid: DeployWithCodeDeploy
+            Effect: Allow
+            Action:
+              - codedeploy:CreateDeployment
+              - codedeploy:GetApplication
+              - codedeploy:GetApplicationRevision
+              - codedeploy:GetDeployment
+              - codedeploy:GetDeploymentConfig
+              - codedeploy:RegisterApplicationRevision
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:codedeploy:${AWS::Region}:${AWS::AccountId}:application:${CodeDeployApplication}'
+              - !Sub 'arn:${AWS::Partition}:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:${CodeDeployApplication}/${DeploymentGroup}'
+              - !Sub 'arn:${AWS::Partition}:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentconfig:*'
+          - Sid: RegisterNewRevision
+            Effect: Allow
+            Action:
+              - ecs:RegisterTaskDefinition
+              - ecs:DescribeTaskDefinition
+              - ecs:TagResource
+            Resource: '*'
+          - Sid: HandTaskRolesToEcs
+            Effect: Allow
+            Action: iam:PassRole
+            Resource:
+              - !GetAtt TaskExecutionRole.Arn
+              - !GetAtt TaskRole.Arn
+            Condition:
+              StringEquals:
+                iam:PassedToService: ecs-tasks.amazonaws.com
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-pipeline-role'
+      Description: Used by CodePipeline to release new order-app images.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref PipelinePolicy
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-pipeline'
+      PipelineType: V2
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        # 1. The image that was pushed. imageDetail.json carries its digest, so the release is
+        #    pinned even if "latest" moves while it runs.
+        - Name: Source
+          Actions:
+            - Name: Image
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: ECR
+                Version: '1'
+              Configuration:
+                RepositoryName: !ImportValue
+                  Fn::Sub: '${Project}-${Environment}-orders-repository-name'
+                ImageTag: latest
+              OutputArtifacts:
+                - Name: ImageArtifact
+        # 2. taskdef.json + appspec.yaml from the latest task definition revision.
+        - Name: Prepare
+          Actions:
+            - Name: RenderDeploymentFiles
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref PrepareProject
+              InputArtifacts:
+                - Name: ImageArtifact
+              OutputArtifacts:
+                - Name: DeployArtifact
+        # 3. Blue/green release. To undo a release after blue is gone, use
+        #    "Start rollback" on this stage and pick the last good execution.
+        - Name: Deploy
+          Actions:
+            - Name: BlueGreen
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeployToECS
+                Version: '1'
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref DeploymentGroup
+                TaskDefinitionTemplateArtifact: DeployArtifact
+                TaskDefinitionTemplatePath: taskdef.json
+                AppSpecTemplateArtifact: DeployArtifact
+                AppSpecTemplatePath: appspec.yaml
+                Image1ArtifactName: ImageArtifact
+                Image1ContainerName: IMAGE1_NAME
+              InputArtifacts:
+                - Name: DeployArtifact
+                - Name: ImageArtifact
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # --- EventBridge: a new "latest" image starts the pipeline. GitHub needs no pipeline permission.
+  EventsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${Project}-${Environment}-orders-events-policy'
+      Description: Lets EventBridge start the order release pipeline and nothing else.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: StartReleasePipeline
+            Effect: Allow
+            Action: codepipeline:StartPipelineExecution
+            Resource: !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+
+  EventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-events-role'
+      Description: Used by the image-pushed EventBridge rule to start the release pipeline.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref EventsPolicy
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Matches only "latest", so one merge (which pushes sha-<commit> and latest) starts one release.
+  ImagePushedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-image-pushed'
+      Description: A new order-app image tagged latest starts the release pipeline.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ecr
+        detail-type:
+          - ECR Image Action
+        detail:
+          action-type:
+            - PUSH
+          result:
+            - SUCCESS
+          repository-name:
+            - !ImportValue
+              Fn::Sub: '${Project}-${Environment}-orders-repository-name'
+          image-tag:
+            - latest
+      Targets:
+        - Id: release-pipeline
+          Arn: !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+          RoleArn: !GetAtt EventsRole.Arn
+
+  # ============================================================ 7. Cost guardrail
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${Project}-${Environment}-orders-monthly-budget'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetAlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetAlertEmail
+
+Outputs:
+  ApplicationUrl:
+    Description: The one public address for merchants and customers.
+    Value: !Sub 'http://${LoadBalancer.DNSName}'
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  PipelineName:
+    Value: !Ref Pipeline
+  CodeDeployApplication:
+    Value: !Ref CodeDeployApplication
+  DeploymentGroupName:
+    Value: !Ref DeploymentGroup
+  ArtifactBucketName:
+    Description: Empty this bucket before deleting the stack.
+    Value: !Ref ArtifactBucket
+  VpcId:
+    Value: !Ref Vpc
+  PrivateRouteTableId:
+    Description: Has no route to the internet - only local and the S3 gateway endpoint.
+    Value: !Ref PrivateRouteTable

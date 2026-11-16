@@ -1,0 +1,22 @@
+# CloudFormation Git sync deployment file for stack "onward-dev-registry".
+# Create this stack first: the order system stack imports the repository it creates,
+# and ECS needs an image in it before the service can start.
+template-file-path: infrastructure/registry.yaml
+
+parameters:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev
+
+  # Only the main branch of this repository may push images (GitHub OIDC, no access keys).
+  GitHubOwner: jadofils
+  AppRepository: onward-orders-app
+  # Set to 'false' if this AWS account already has the token.actions.githubusercontent.com provider.
+  CreateGitHubOidcProvider: 'true'
+
+  ImagesToKeep: '15'
+
+tags:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev
