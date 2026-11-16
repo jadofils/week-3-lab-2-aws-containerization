@@ -11,6 +11,9 @@ parameters:
   # Only the main branch of this repository may push images (GitHub OIDC, no access keys).
   GitHubOwner: jadofils
   AppRepository: week-3-lab-2-orders-app
+  # Numeric IDs from GitHub's immutable OIDC subject (repo:owner@id/repo@id:ref:...).
+  GitHubOwnerId: '114186160'
+  AppRepositoryId: '1460005073'
   # Set to 'false' if this AWS account already has the token.actions.githubusercontent.com provider.
   CreateGitHubOidcProvider: 'false'
 

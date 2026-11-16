@@ -35,6 +35,19 @@ Parameters:
     Type: String
     Default: week-3-lab-2-orders-app
     Description: Application repository whose main branch may push images.
+  # GitHub issues tokens with an immutable subject (name@id) for this repository. The numeric IDs
+  # never change, so a deleted and recreated repository with the same name cannot assume the role.
+  # Read them with: gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+  GitHubOwnerId:
+    Type: String
+    Default: '114186160'
+    AllowedPattern: '^[0-9]+$'
+    Description: Numeric GitHub ID of GitHubOwner.
+  AppRepositoryId:
+    Type: String
+    Default: '1460005073'
+    AllowedPattern: '^[0-9]+$'
+    Description: Numeric GitHub ID of AppRepository.
   CreateGitHubOidcProvider:
     Type: String
     Default: 'true'
@@ -163,7 +176,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOwner}/${AppRepository}:ref:refs/heads/main'
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/${AppRepository}@${AppRepositoryId}:ref:refs/heads/main'
       ManagedPolicyArns:
         - !Ref EcrPushPolicy
       Tags:

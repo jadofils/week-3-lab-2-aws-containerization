@@ -121,7 +121,7 @@ Step by step:
 1. **Merge.** On `main`, `build-and-push.yml` runs the tests and builds the image.
 2. **Push.**
    - GitHub issues a short-lived OIDC token. AWS exchanges it for temporary credentials on `onward-dev-github-actions-role`.
-   - The role trusts only `repo:jadofils/week-3-lab-2-orders-app:ref:refs/heads/main`.
+   - The role trusts only `repo:jadofils@114186160/week-3-lab-2-orders-app@1460005073:ref:refs/heads/main` (GitHub's immutable subject: owner and repository names with their permanent numeric IDs).
    - The job pushes the image tagged `sha-<commit>` (immutable) and moves `latest` to it.
 3. **Trigger.** ECR emits an *ECR Image Action* event. The EventBridge rule matches pushes of `latest` to `onward-dev-orders` and starts the pipeline through its own role.
 4. **Source.** The ECR source action writes `imageDetail.json`. It contains the image **digest**, so the release is pinned even though `latest` will move later.
