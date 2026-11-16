@@ -13,7 +13,7 @@ Order matters: the service can't start until an image exists ([D3](../decisions/
    - Deployment file `infrastructure/registry-deployment.yaml`, role `onward-dev-gitsync-role`.
    - When it finishes, copy the output `GitHubActionsRoleArn`.
 4. **First image.**
-   - In `week-3-lab-2-orders-app` on GitHub, open *Settings → Secrets and variables → Actions → Variables*. Add `AWS_ROLE_ARN` (the ARN from step 3) and `AWS_REGION=eu-west-1`. These are variables, not secrets: neither is a credential.
+   - In `week-3-lab-2-aws-containerization` on GitHub, open *Settings → Secrets and variables → Actions → Variables*. Add `AWS_ROLE_ARN` (the ARN from step 3) and `AWS_REGION=eu-west-1`. These are variables, not secrets: neither is a credential.
    - Run *Actions → Build and push image → Run workflow* on `main`. ECR now holds `sha-<commit>` and `latest`.
 5. **Service stack.** *Sync from Git* again:
    - Stack `onward-dev-orders`, deployment file `infrastructure/deployment.yaml`, same role.
@@ -68,7 +68,7 @@ while true; do curl -s -m 3 -o /dev/null -w "%{http_code} " "$URL/health"; sleep
 
 ## 2. Pushing a change results in a new version running, with no manual steps
 
-1. In `week-3-lab-2-orders-app`, make a visible change, for example the `app.info.application-name` text, and bump `<version>` in `pom.xml`. Open a pull request and merge it.
+1. In `week-3-lab-2-aws-containerization`, make a visible change, for example the `app.info.application-name` text, and bump `<version>` in `pom.xml`. Open a pull request and merge it.
 2. Show each hand-off with no one logged in:
    - **GitHub Actions:** the run passes the tests and pushes `sha-<commit>` and `latest`.
    - **ECR:**

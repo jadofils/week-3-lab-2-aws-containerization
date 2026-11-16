@@ -33,7 +33,7 @@ Parameters:
     Description: GitHub user or organization that owns the application repository.
   AppRepository:
     Type: String
-    Default: week-3-lab-2-orders-app
+    Default: week-3-lab-2-aws-containerization
     Description: Application repository whose main branch may push images.
   CreateGitHubOidcProvider:
     Type: String

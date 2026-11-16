@@ -9,10 +9,21 @@
 #   AWS_REGION    eu-west-1
 name: Build and push image
 
+# Runs only when the application changes: infrastructure and docs commits do not release an image.
 on:
   pull_request:
+    paths:
+      - 'app/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build-and-push.yml'
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build-and-push.yml'
   workflow_dispatch:
 
 permissions:

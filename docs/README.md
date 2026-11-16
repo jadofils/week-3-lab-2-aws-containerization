@@ -11,4 +11,4 @@
 | [Live review checks](demo/README.md) | **Deliverable 4**: how to build it and prove every client check |
 | [Discovery template](discovery-report/template.md) | Blank course template |
 
-**Deliverable 2** is the two repositories: [week-3-lab-2-orders-app](https://github.com/jadofils/week-3-lab-2-orders-app) (application) and [week-3-lab-2-aws-containerization](https://github.com/jadofils/week-3-lab-2-aws-containerization) (infrastructure) ([architecture §1](architecture/README.md#1-the-two-repositories-and-three-stacks)).
+**Deliverable 2** is this repository: the application in [`app/`](../app/README.md) and the infrastructure in [`infrastructure/`](../infrastructure) ([architecture §1](architecture/README.md#1-the-repository-and-three-stacks)).

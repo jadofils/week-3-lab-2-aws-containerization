@@ -4,12 +4,12 @@ Region `eu-west-1`, environment `dev`. Read this page top to bottom: each sectio
 
 The same design as an editable diagram: [`architecture.drawio`](architecture.drawio), [open in diagrams.net](https://app.diagrams.net/#Hjadofils%2Fweek-3-lab-2-aws-containerization%2Fmain%2Fdocs%2Farchitecture%2Farchitecture.drawio). Page 1 shows the VPC and runtime; page 2 shows the delivery pipeline and how a change flows.
 
-## 1. The two repositories and three stacks
+## 1. The repository and three stacks
 
-| Repository | Holds | Deployed by |
+| Part | Holds | Deployed by |
 | --- | --- | --- |
-| **Application** ([`week-3-lab-2-orders-app`](https://github.com/jadofils/week-3-lab-2-orders-app)) | `app/` (Spring Boot), `Dockerfile`, `.github/workflows/build-and-push.yml` | GitHub Actions → Amazon ECR → EventBridge → CodePipeline → CodeDeploy |
-| **Infrastructure** ([`week-3-lab-2-aws-containerization`](https://github.com/jadofils/week-3-lab-2-aws-containerization)) | `infrastructure/` (CloudFormation), `docs/` | CloudFormation Git sync |
+| **Application** | [`app/`](../../app/README.md) (Spring Boot), `Dockerfile`, `.github/workflows/build-and-push.yml` | GitHub Actions → Amazon ECR → EventBridge → CodePipeline → CodeDeploy |
+| **Infrastructure** | `infrastructure/` (CloudFormation), `docs/` | CloudFormation Git sync |
 
 | Stack | Template → deployment file | What it creates | Why it is separate |
 | --- | --- | --- | --- |
@@ -121,7 +121,7 @@ Step by step:
 1. **Merge.** On `main`, `build-and-push.yml` runs the tests and builds the image.
 2. **Push.**
    - GitHub issues a short-lived OIDC token. AWS exchanges it for temporary credentials on `onward-dev-github-actions-role`.
-   - The role trusts only `repo:jadofils/week-3-lab-2-orders-app:ref:refs/heads/main`.
+   - The role trusts only `repo:jadofils/week-3-lab-2-aws-containerization:ref:refs/heads/main`.
    - The job pushes the image tagged `sha-<commit>` (immutable) and moves `latest` to it.
 3. **Trigger.** ECR emits an *ECR Image Action* event. The EventBridge rule matches pushes of `latest` to `onward-dev-orders` and starts the pipeline through its own role.
 4. **Source.** The ECR source action writes `imageDetail.json`. It contains the image **digest**, so the release is pinned even though `latest` will move later.

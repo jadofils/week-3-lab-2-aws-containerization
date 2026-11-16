@@ -61,4 +61,4 @@ Merging to `main` is the only manual step.
 4. It pushes the image to the ECR repository `onward-dev-orders`, tagged `sha-<commit>` (immutable) and `latest`.
 5. The `latest` push fires an EventBridge rule. CodePipeline and CodeDeploy then release it blue/green, with no downtime and automatic rollback on errors.
 
-The pipeline and everything it deploys live in the infrastructure repository. See its [architecture page](https://github.com/jadofils/week-3-lab-2-aws-containerization/blob/main/docs/architecture/README.md#4-how-a-change-reaches-customers).
+The pipeline and everything it deploys are defined in [`infrastructure/`](../infrastructure). See the [architecture page](../docs/architecture/README.md#4-how-a-change-reaches-customers).
