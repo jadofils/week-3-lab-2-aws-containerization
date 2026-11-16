@@ -102,7 +102,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  dev([Engineer merges PR to main<br/>application repository]) --> gha
+  dev([Engineer merges PR to main<br/>change under app/]) --> gha
   subgraph gh["GitHub"]
     gha["GitHub Actions<br/>mvn verify · docker build"]
   end

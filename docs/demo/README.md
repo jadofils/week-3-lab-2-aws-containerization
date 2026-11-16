@@ -1,13 +1,13 @@
 # Live review: proving each client check
 
-## Build it from the repositories (one time, Region eu-west-1)
+## Build it from the repository (one time, Region eu-west-1)
 
 Order matters: the service can't start until an image exists ([D3](../decisions/README.md#d3-three-stacks-registry-first)).
 
 1. **Bootstrap Git sync.** Go to *CloudFormation → Create stack → With new resources*.
    - Upload `infrastructure/bootstrap/gitsync-bootstrap.yaml` and name the stack `onward-dev-gitsync-bootstrap`.
    - Acknowledge the IAM capability and create the stack. It creates the connection `onward-dev-github` and the role `onward-dev-gitsync-role`.
-2. **Approve the connection.** Go to *Developer Tools → Settings → Connections → onward-dev-github → Update pending connection*. Authorize the GitHub app for **both** repositories. The status becomes *Available*.
+2. **Approve the connection.** Go to *Developer Tools → Settings → Connections → onward-dev-github → Update pending connection*. Authorize the GitHub app for `week-3-lab-2-aws-containerization`. The status becomes *Available*.
 3. **Registry stack.** Go to *CloudFormation → Create stack → Sync from Git*.
    - Stack `onward-dev-registry`, repository `week-3-lab-2-aws-containerization`, branch `main`.
    - Deployment file `infrastructure/registry-deployment.yaml`, role `onward-dev-gitsync-role`.
@@ -108,12 +108,12 @@ while true; do curl -s -m 3 -o /dev/null -w "%{http_code} " "$URL/health"; sleep
     --target-pipeline-execution-id $GOOD
   ```
 
-## 4. No long-lived credentials in the repositories or pipelines
+## 4. No long-lived credentials in the repository or pipelines
 
 - **GitHub:** the repository has no AWS secrets, only the `AWS_ROLE_ARN` and `AWS_REGION` variables.
   - The workflow uses `permissions: id-token: write` and `aws-actions/configure-aws-credentials` with `role-to-assume`.
   - The run log shows *Assuming role with OIDC*.
-- **The role trusts only the main branch of the app repository:**
+- **The role trusts only the main branch of this repository:**
   ```bash
   aws iam get-role --role-name onward-dev-github-actions-role \
     --query "Role.AssumeRolePolicyDocument.Statement[0].Condition"
@@ -167,8 +167,8 @@ while true; do curl -s -m 3 -o /dev/null -w "%{http_code} " "$URL/health"; sleep
 ## 7. A new engineer can understand how the pieces fit together
 
 Walk through, in this order:
-1. The two repository READMEs.
-2. The [architecture page](../architecture/README.md): repositories and stacks, then the VPC, the request flow, the release flow and rollback.
+1. The [README](../../README.md) and the [app README](../../app/README.md).
+2. The [architecture page](../architecture/README.md): repository layout and stacks, then the VPC, the request flow, the release flow and rollback.
 3. `template.yaml`, in its numbered sections.
 4. `build-and-push.yml`.
 
@@ -176,11 +176,11 @@ Walk through, in this order:
 
 Walk through the [cost page](../cost/README.md): endpoints vs NAT, off-hours shutdown, and the pipeline cost. Then go through the [decisions](../decisions/README.md).
 
-## 9. The whole setup can be rebuilt from the repositories
+## 9. The whole setup can be rebuilt from the repository
 
 1. Disconnect Git sync on `onward-dev-orders` (stack → *Git sync* tab). Empty the artifact bucket (`aws s3 rm s3://onward-dev-orders-artifacts-<account-id> --recursive`), then delete the stack.
 2. Repeat step 5 of the build section. Everything comes back from the templates, the deployment file and the image already in ECR.
-3. For a full rebuild, delete `onward-dev-registry` too; its repository must be emptied first. Then repeat steps 3–5.
+3. For a full rebuild, delete `onward-dev-registry` too; its ECR repository must be emptied first. Then repeat steps 3–5.
 
 ## After the review: stop the charges
 
