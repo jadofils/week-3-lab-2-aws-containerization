@@ -1,0 +1,15 @@
+# Maven build output
+app/target/
+
+# VS Code workspace preferences
+.vscode/
+
+# Local environment and logs
+.env
+*.log
+
+# Claude Code local config and any Claude-named files
+.claude/
+*claude*
+*Claude*
+*CLAUDE*
