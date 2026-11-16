@@ -12,7 +12,7 @@ parameters:
   GitHubOwner: jadofils
   AppRepository: week-3-lab-2-orders-app
   # Set to 'false' if this AWS account already has the token.actions.githubusercontent.com provider.
-  CreateGitHubOidcProvider: 'true'
+  CreateGitHubOidcProvider: 'false'
 
   ImagesToKeep: '15'
 
