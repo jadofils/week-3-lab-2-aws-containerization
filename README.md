@@ -18,12 +18,12 @@ customers ──HTTP──▶ ALB (public subnets, 2 AZs) ─▶ blue | green ta
 
 ## Two repositories
 
-The brief requires application code and infrastructure code in separate repositories. This folder holds both while they are being written:
+The brief requires application code and infrastructure code in separate repositories:
 
-| Repository | Paths from this folder |
-| --- | --- |
-| `onward-orders-app` | [`app/`](app/README.md), `Dockerfile`, `.github/workflows/build-and-push.yml` |
-| `onward-orders-infrastructure` | [`infrastructure/`](infrastructure), [`docs/`](docs/README.md) |
+| Repository | Holds | Deployed by |
+| --- | --- | --- |
+| [week-3-lab-2-orders-app](https://github.com/jadofils/week-3-lab-2-orders-app) | `app/` (Spring Boot), `Dockerfile`, `.github/workflows/build-and-push.yml` | GitHub Actions → ECR → EventBridge → CodePipeline → CodeDeploy |
+| [week-3-lab-2-aws-containerization](https://github.com/jadofils/week-3-lab-2-aws-containerization) (this one) | `infrastructure/` (CloudFormation), `docs/` | CloudFormation Git sync |
 
 ## Infrastructure layout
 
@@ -35,10 +35,10 @@ The brief requires application code and infrastructure code in separate reposito
 
 Start with the [architecture](docs/architecture/README.md), then read `template.yaml` top to bottom. It is split into numbered sections.
 
-## Run the app locally
+## Diagram
 
-```powershell
-cd app
-mvn spring-boot:run    # http://localhost:8080
-mvn verify             # tests
-```
+[`docs/architecture/architecture.drawio`](docs/architecture/architecture.drawio): the VPC, the delivery pipeline and how a change flows. [Open it in diagrams.net](https://app.diagrams.net/#Hjadofils%2Fweek-3-lab-2-aws-containerization%2Fmain%2Fdocs%2Farchitecture%2Farchitecture.drawio).
+
+## Docs
+
+Discovery report, client profile, architecture, decisions, cost and the live-review checks: see [`docs/`](docs/README.md).

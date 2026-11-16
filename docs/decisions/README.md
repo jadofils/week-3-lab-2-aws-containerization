@@ -13,8 +13,8 @@ Each decision gives the choice, the business reason, and the alternatives reject
 
 ## D2. Two repositories: application and infrastructure
 **Decision.**
-- `onward-orders-app` holds the code, the `Dockerfile` and the build workflow.
-- `onward-orders-infrastructure` holds the CloudFormation templates, the Git sync deployment files and these docs.
+- `week-3-lab-2-orders-app` holds the code, the `Dockerfile` and the build workflow.
+- `week-3-lab-2-aws-containerization` holds the CloudFormation templates, the Git sync deployment files and these docs.
 
 **Reason.**
 - The brief requires separate repositories.
@@ -44,7 +44,7 @@ The last two are Git-synced from the infrastructure repository.
 ## D4. GitHub Actions signs in to AWS with OIDC; no access keys
 **Decision.**
 - `onward-dev-registry` creates the IAM OIDC identity provider for `token.actions.githubusercontent.com` and the role `onward-dev-github-actions-role`.
-- The trust policy requires `aud = sts.amazonaws.com` and `sub = repo:<owner>/onward-orders-app:ref:refs/heads/main`.
+- The trust policy requires `aud = sts.amazonaws.com` and `sub = repo:jadofils/week-3-lab-2-orders-app:ref:refs/heads/main`.
 - The role has one customer managed policy, `onward-dev-ecr-push-policy`. It allows `ecr:GetAuthorizationToken` plus the push actions on the `onward-dev-orders` repository only.
 
 **Reason.**
