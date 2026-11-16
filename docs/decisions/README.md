@@ -11,23 +11,17 @@ Each decision gives the choice, the business reason, and the alternatives reject
 
 **Rejected.** `af-south-1`: an opt-in Region with higher prices.
 
-## D2. One repository, application and infrastructure in separate folders
+## D2. Two repositories: application and infrastructure
 **Decision.**
-- `week-3-lab-2-aws-containerization` holds everything:
-  - `app/`, the `Dockerfile` and `.github/workflows/build-and-push.yml`: the application and its build;
-  - `infrastructure/` and `docs/`: the CloudFormation templates, the Git sync deployment files and these docs.
-- The build workflow has path filters: it runs only when `app/`, `Dockerfile`, `.dockerignore` or the workflow changes.
-- Git sync updates a stack only when its template or deployment file changes.
+- `week-3-lab-2-orders-app` holds the code, the `Dockerfile` and the build workflow.
+- `week-3-lab-2-aws-containerization` holds the CloudFormation templates, the Git sync deployment files and these docs.
 
 **Reason.**
-- One place to read, clone and rebuild from.
-- Each part still has one way of being released: an app change produces an image, and an infrastructure change updates stacks. A docs change releases nothing.
+- The brief requires separate repositories.
+- Each repository has one way of being released: an app merge produces an image, and an infrastructure merge updates stacks.
+- Application engineers can't change the network or IAM by accident, and the repositories can have different reviewers.
 
-**Trade-off.**
-- The brief asks for separate repositories. Here the separation is by folder and delivery path, not by repository.
-- One merge can change both the app and its permissions, and both share the same reviewers. Branch protection on `main` and pull request review are the control.
-
-**Rejected.** Two repositories (`week-3-lab-2-orders-app` for the app, this one for the infrastructure). It matches the brief, but it doubles the setup and splits the story a new engineer has to follow.
+**Rejected.** One repository with path filters. It is simpler, but it breaks the brief, and one merge could change both the app and its permissions.
 
 ## D3. Three stacks, registry first
 **Decision.**
@@ -35,7 +29,7 @@ Each decision gives the choice, the business reason, and the alternatives reject
 - `onward-dev-registry`: the ECR repository and the GitHub OIDC role.
 - `onward-dev-orders`: everything that runs and releases the service.
 
-The last two are Git-synced from `infrastructure/` in this repository.
+The last two are Git-synced from the infrastructure repository.
 
 **Reason.**
 - ECS can't start the service until an image exists. A separate registry stack lets the first image be pushed before the service stack is created.
@@ -50,7 +44,7 @@ The last two are Git-synced from `infrastructure/` in this repository.
 ## D4. GitHub Actions signs in to AWS with OIDC; no access keys
 **Decision.**
 - `onward-dev-registry` creates the IAM OIDC identity provider for `token.actions.githubusercontent.com` and the role `onward-dev-github-actions-role`.
-- The trust policy requires `aud = sts.amazonaws.com` and `sub = repo:jadofils/week-3-lab-2-aws-containerization:ref:refs/heads/main`.
+- The trust policy requires `aud = sts.amazonaws.com` and `sub = repo:jadofils/week-3-lab-2-orders-app:ref:refs/heads/main`.
 - The role has one customer managed policy, `onward-dev-ecr-push-policy`. It allows `ecr:GetAuthorizationToken` plus the push actions on the `onward-dev-orders` repository only.
 
 **Reason.**
@@ -128,10 +122,10 @@ The last two are Git-synced from `infrastructure/` in this repository.
 **Reason.**
 - CloudFormation can't update the task definition of a service controlled by CodeDeploy. This split avoids that error.
 - Infrastructure owners still change task size or logging in one place, and the change is picked up by the next release.
-- `app/` needs no AWS-specific files, so it stays free of account IDs and role ARNs.
+- The application repository needs no AWS-specific files, so it stays free of account IDs and role ARNs.
 
 **Rejected.**
-- Keeping `taskdef.json` and `appspec.yaml` next to the application code (the AWS tutorial pattern): it couples the app to infrastructure names and the account ID.
+- Keeping `taskdef.json` and `appspec.yaml` in the application repository (the AWS tutorial pattern): it couples the app repository to infrastructure names and the account ID.
 - The `AWS::CodeDeployBlueGreen` CloudFormation hook: it releases through stack updates, not through CodePipeline as the brief requires.
 
 ## D9. CodeDeploy blue/green: canary, alarm rollback, 15-minute blue retention

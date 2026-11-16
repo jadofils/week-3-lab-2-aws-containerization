@@ -9,7 +9,7 @@ Description: >
 #
 # No long-lived credentials: GitHub receives a short-lived OIDC token per workflow run and
 # exchanges it for temporary credentials on one role that trusts only the main branch of the
-# repository (week-3-lab-2-aws-containerization) and may only push to one ECR repository.
+# application repository and may only push to one repository.
 
 Parameters:
   Project:
@@ -30,11 +30,11 @@ Parameters:
   GitHubOwner:
     Type: String
     Default: jadofils
-    Description: GitHub user or organization that owns the repository.
+    Description: GitHub user or organization that owns the application repository.
   AppRepository:
     Type: String
-    Default: week-3-lab-2-aws-containerization
-    Description: GitHub repository (holding app/) whose main branch may push images.
+    Default: week-3-lab-2-orders-app
+    Description: Application repository whose main branch may push images.
   CreateGitHubOidcProvider:
     Type: String
     Default: 'true'
@@ -142,7 +142,7 @@ Resources:
               - ecr:UploadLayerPart
             Resource: !GetAtt OrdersRepository.Arn
 
-  # Trusts only workflow runs on the main branch of the GitHub repository.
+  # Trusts only workflow runs on the main branch of the application repository.
   # Pull requests, other branches and other repositories cannot assume it.
   GitHubActionsRole:
     Type: AWS::IAM::Role
@@ -189,5 +189,5 @@ Outputs:
     Export:
       Name: !Sub '${Project}-${Environment}-orders-repository-arn'
   GitHubActionsRoleArn:
-    Description: Set as the AWS_ROLE_ARN variable (not a secret) in the GitHub repository.
+    Description: Set as the AWS_ROLE_ARN variable (not a secret) in the application repository.
     Value: !GetAtt GitHubActionsRole.Arn

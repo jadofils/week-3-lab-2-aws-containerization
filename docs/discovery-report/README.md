@@ -52,7 +52,7 @@ Onward Logistics needs every approved change to its order system to reach custom
 
 **A blue/green release pipeline for a containerized order service on Amazon ECS with Fargate, in private subnets with no internet route.**
 
-- **Merging is the only manual step.** A merge to `main` that changes `app/` makes GitHub Actions test the code, build the image and push it to Amazon ECR. It signs in to AWS with a short-lived OIDC token, not a stored key. The new image fires an EventBridge rule, which starts CodePipeline. CodeDeploy then releases it.
+- **Merging is the only manual step.** A merge to `main` in the application repository makes GitHub Actions test the code, build the image and push it to Amazon ECR. It signs in to AWS with a short-lived OIDC token, not a stored key. The new image fires an EventBridge rule, which starts CodePipeline. CodeDeploy then releases it.
 - **No downtime.** CodeDeploy starts a complete second set of containers ("green") next to the running set ("blue"). It sends 10% of customers to green for 5 minutes, then all of them.
 - **Quick way back.**
   - If errors rise during the release, an alarm rolls it back automatically.
@@ -62,7 +62,7 @@ Onward Logistics needs every approved change to its order system to reach custom
 - **Survives failures and peaks.**
   - At least two containers run, one in each of two zones. Failed containers are replaced automatically.
   - On busy days the service grows from 2 up to 6 containers when CPU is high, and shrinks afterwards.
-- **Readable and rebuildable.** One repository with the app and the infrastructure in separate folders, three short CloudFormation templates and one numbered architecture page. Everything is deployed by Git sync and can be rebuilt from Git.
+- **Readable and rebuildable.** Two repositories, three short CloudFormation templates and one numbered architecture page. Everything is deployed by Git sync and can be rebuilt from Git.
 
 This suits Onward better than rolling updates because customers never see a half-released version and going back takes seconds, not a new deployment. It suits them better than manual releases because nobody holds keys and nobody logs in to deploy.
 
@@ -74,14 +74,14 @@ This suits Onward better than rolling updates because customers never see a half
 | Application Load Balancer | The single public address. It has two target groups (blue and green) and one listener that CodeDeploy switches between them. | Makes zero-downtime traffic shifting possible, and health-checks `/health`. |
 | Amazon ECR | Stores the versioned images. Tags are immutable, except `latest`, which marks the release. Scan on push is on, and a lifecycle rule keeps the last 15 images. | Private registry reachable through VPC endpoints. Each release is pinned by digest, so a deployed version can't change underneath. |
 | VPC endpoints (`ecr.api`, `ecr.dkr`, `logs` interface; `s3` gateway) | Private connectivity from containers to the AWS services they need. | Meets "no path to the internet". It is cheaper than a NAT gateway and keeps traffic on AWS's network. |
-| GitHub Actions + IAM OIDC identity provider | Tests, builds and pushes the image, and signs in to AWS with a short-lived token. | No AWS keys stored in GitHub. The role trusts only the `main` branch of this repository and may only push to one ECR repository. |
-| Amazon EventBridge | Turns "a new `latest` image was pushed" into "start the pipeline". | Required by the brief. It decouples the app build from the pipeline: GitHub needs no permission on CodePipeline. |
+| GitHub Actions + IAM OIDC identity provider | Tests, builds and pushes the image, and signs in to AWS with a short-lived token. | No AWS keys stored in GitHub. The role trusts only the `main` branch of the application repository and may only push to one ECR repository. |
+| Amazon EventBridge | Turns "a new `latest` image was pushed" into "start the pipeline". | Required by the brief. It decouples the app repository from the pipeline: GitHub needs no permission on CodePipeline. |
 | AWS CodePipeline (V2) + AWS CodeBuild | Takes the new image, prepares the deployment files, and hands them to CodeDeploy. | Every release is recorded, and stage rollback redeploys the last good release. V2 is billed per minute, so an idle pipeline costs nothing. |
 | AWS CodeDeploy (ECS blue/green) | Starts green, shifts traffic 10% then 100%, rolls back on alarm, and keeps blue for 15 minutes. | Required by the brief, and it is what makes releases safe and reversible. Free for ECS. |
 | Application Auto Scaling | Keeps 2–6 containers, targets 50% average CPU, and stops `dev` containers outside working hours. | Grows on busy days and shrinks afterwards with no one adjusting anything. Idle `dev` time costs nothing for compute. |
 | Amazon CloudWatch | Container logs (14-day retention), CPU metrics for scaling, and the 5xx alarm that triggers rollback. | Gives the evidence for every check, and turns "errors are rising" into an automatic rollback. |
 | AWS IAM (customer managed and AWS managed policies only) | One role per job: GitHub, task execution, pipeline, build, deployment, EventBridge and Git sync. | Least privilege and no inline policies (brief and client standard). |
-| AWS CloudFormation + Git sync | Three templates deployed from `infrastructure/` in the repository. | Nothing is clicked in the console, and every change is reviewed in Git. |
+| AWS CloudFormation + Git sync | Three templates deployed from the infrastructure repository. | Nothing is clicked in the console, and every change is reviewed in Git. |
 | AWS Budgets | Monthly budget with email alerts at 80% actual and 100% forecast. | Spend stays visible (client standard). |
 
 ### What it costs
@@ -116,7 +116,7 @@ Approximate list prices for `eu-west-1`, On-Demand, Free Tier not applied, taxes
 | Head of Security | No long-lived keys, one public entry point, and no internet path from the app. | No IAM user access keys exist, and GitHub has only a role ARN. Container subnets' route table has no `0.0.0.0/0` route, and tasks have no public IP. |
 | Head of Operations | Failed containers and lost zones are handled automatically, and capacity follows demand. | Stopping a task: a new one starts and the page keeps answering. During a CPU spike the task count rises towards 6, then falls back to 2. |
 | Finance Lead | Knows what the private connectivity costs, and idle `dev` time costs no compute. | The [cost page](../cost/README.md) shows the endpoints versus NAT. Running tasks show 0 outside working hours. Budget alerts arrive at 80% of the limit. |
-| Engineers | Release by merging, and find their way around from the docs. | A new engineer follows the [architecture page](../architecture/README.md) and the READMEs to a successful release without a guided tour. |
+| Engineers | Release by merging, and find their way around from the docs. | A new engineer follows the [architecture page](../architecture/README.md) and the repository READMEs to a successful release without a guided tour. |
 
 ### Limits and risks of your design
 

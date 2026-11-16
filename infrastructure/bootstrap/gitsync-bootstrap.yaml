@@ -22,7 +22,7 @@ Parameters:
 
 Resources:
   # Created as PENDING. A person approves it once in the GitHub handshake; AWS requires this.
-  # Approve it for week-3-lab-2-aws-containerization: Git sync deploys infrastructure/ from it.
+  # Approve it for both repositories: the infrastructure repository is synced by Git sync.
   GitHubConnection:
     Type: AWS::CodeConnections::Connection
     Properties:

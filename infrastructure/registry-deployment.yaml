@@ -10,7 +10,7 @@ parameters:
 
   # Only the main branch of this repository may push images (GitHub OIDC, no access keys).
   GitHubOwner: jadofils
-  AppRepository: week-3-lab-2-aws-containerization
+  AppRepository: week-3-lab-2-orders-app
   # Set to 'false' if this AWS account already has the token.actions.githubusercontent.com provider.
   CreateGitHubOidcProvider: 'true'
 

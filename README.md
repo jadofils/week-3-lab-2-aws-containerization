@@ -16,20 +16,14 @@ customers ──HTTP──▶ ALB (public subnets, 2 AZs) ─▶ blue | green ta
                            └─ AWS traffic only ─▶ VPC endpoints: ecr.api · ecr.dkr · logs · s3 (gateway)
 ```
 
-## Repository layout
+## Two repositories
 
-The application and the infrastructure live in this one repository, in separate folders with separate delivery paths:
+The brief requires application code and infrastructure code in separate repositories:
 
-| Path | Holds | Deployed by |
+| Repository | Holds | Deployed by |
 | --- | --- | --- |
-| [`app/`](app/README.md), `Dockerfile`, `.github/workflows/build-and-push.yml` | The Spring Boot application and its container build | GitHub Actions → ECR → EventBridge → CodePipeline → CodeDeploy |
-| `infrastructure/`, `docs/` | CloudFormation templates and documentation | CloudFormation Git sync |
-
-The build workflow runs only when `app/`, `Dockerfile`, `.dockerignore` or the workflow itself changes, so infrastructure and docs commits do not release a new image. The GitHub OIDC role trusts only `repo:jadofils/week-3-lab-2-aws-containerization:ref:refs/heads/main`.
-
-### One-time GitHub setup
-
-After the `onward-dev-registry` stack exists, open *Settings → Secrets and variables → Actions → **Variables*** in this repository and add `AWS_ROLE_ARN` (stack output `GitHubActionsRoleArn`) and `AWS_REGION` (`eu-west-1`). These are variables, not secrets: neither is a credential. Then run *Actions → Build and push image → Run workflow* to push the first image.
+| [week-3-lab-2-orders-app](https://github.com/jadofils/week-3-lab-2-orders-app) | `app/` (Spring Boot), `Dockerfile`, `.github/workflows/build-and-push.yml` | GitHub Actions → ECR → EventBridge → CodePipeline → CodeDeploy |
+| [week-3-lab-2-aws-containerization](https://github.com/jadofils/week-3-lab-2-aws-containerization) (this one) | `infrastructure/` (CloudFormation), `docs/` | CloudFormation Git sync |
 
 ## Infrastructure layout
 
