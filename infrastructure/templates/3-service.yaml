@@ -4,7 +4,7 @@ Description: >
   target groups in front of an ECS Fargate service in the private subnets of both Availability
   Zones. Capacity follows average CPU, dev stops outside working hours, and a monthly budget
   warns before spend runs away.
-  Deployed by CloudFormation Git sync from infrastructure/deployments/dev/service.yaml.
+  Deployed by CloudFormation Git sync from infrastructure/deployments/dev/3-service.yaml.
 
 # Stack 2 of 3: network -> service -> pipeline.
 # Imports the VPC, subnets and security groups (network) and the image repository

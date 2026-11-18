@@ -36,7 +36,7 @@ Templates live in `infrastructure/templates/` and Git sync deployment files in `
 **Reason.**
 - ECS can't start the service until an image exists. A separate registry stack lets the first image be pushed before the service stack is created.
 - Each layer has its own rate of change: the network rarely changes, and the pipeline can change or be rebuilt without touching what runs. A merge only updates the stack whose files it touches.
-- All traffic rules are in one file (`network.yaml`), so the security review reads one place.
+- All traffic rules are in one file (`2-network.yaml`), so the security review reads one place.
 - Smaller templates, each readable in one sitting.
 - Stack order on a rebuild is fixed: bootstrap → registry → first image push → network → service → pipeline. Delete in reverse.
 - The registry outlives the service: tearing down the other stacks to save money keeps every released image.
@@ -120,7 +120,7 @@ Templates live in `infrastructure/templates/` and Git sync deployment files in `
 
 ## D8. The pipeline copies the task definition CloudFormation registered
 **Decision.**
-- `service.yaml` registers the task definition family `onward-dev-orders`: size, roles, logging, port and environment.
+- `3-service.yaml` registers the task definition family `onward-dev-orders`: size, roles, logging, port and environment.
 - The ECS service refers to the **family name**, not a revision, so CloudFormation never needs to change the service's task definition after creation.
 - The *Prepare* stage (CodeBuild project `onward-dev-orders-prepare`, buildspec in the template):
   - reads the latest revision of the family;
@@ -177,7 +177,7 @@ Templates live in `infrastructure/templates/` and Git sync deployment files in `
 - 20:00 every day: min and max set to 0;
 - 07:00 Monday to Friday: back to min 2, max 6.
 
-The schedule is enabled by `OffHoursShutdown: 'true'` in `infrastructure/deployments/dev/service.yaml`; `test` and `prod` keep it off.
+The schedule is enabled by `OffHoursShutdown: 'true'` in `infrastructure/deployments/dev/3-service.yaml`; `test` and `prod` keep it off.
 
 **Reason.** "Idle environments should not cost us money." Fargate stops charging when tasks stop, which saves about $22 a month for `dev`. For a review outside working hours, set the parameter to `'false'` and merge.
 

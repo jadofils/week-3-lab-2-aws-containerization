@@ -83,8 +83,8 @@ An idle pipeline costs nothing, which meets "idle environments should not cost u
 
 ## Keeping cost under control
 
-- **Off-hours shutdown** for `dev` (`OffHoursShutdown` in `infrastructure/deployments/dev/service.yaml`).
+- **Off-hours shutdown** for `dev` (`OffHoursShutdown` in `infrastructure/deployments/dev/3-service.yaml`).
 - **`MaxCapacity: 6`** caps the worst-case task spend.
 - **ECR lifecycle rule** keeps 15 images. **Log retention** is 14 days. **Artifact bucket** objects expire after 30 days.
-- **Budget alert:** `BudgetAlertEmail` in `infrastructure/deployments/dev/service.yaml` emails at 80% of $150 a month actual spend and at 100% forecast.
+- **Budget alert:** `BudgetAlertEmail` in `infrastructure/deployments/dev/3-service.yaml` emails at 80% of $150 a month actual spend and at 100% forecast.
 - **To pay nothing:** delete `onward-dev-pipeline`, `onward-dev-service` and `onward-dev-network`, in that order (the ALB and endpoints go with them). Keep `onward-dev-registry`, so the images remain, and rebuild from Git when needed.

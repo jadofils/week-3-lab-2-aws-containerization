@@ -3,7 +3,7 @@ Description: >
   Onward Logistics - Lab 2 release pipeline: a new image tagged latest in ECR fires EventBridge,
   which starts CodePipeline (Source -> Prepare -> Deploy). CodeDeploy releases it blue/green with
   a 10% canary and rolls back automatically on errors.
-  Deployed by CloudFormation Git sync from infrastructure/deployments/dev/pipeline.yaml.
+  Deployed by CloudFormation Git sync from infrastructure/deployments/dev/4-pipeline.yaml.
 
 # Stack 3 of 3: network -> service -> pipeline.
 # Imports the ECS service, listener, target groups and task roles (service stack) and the image

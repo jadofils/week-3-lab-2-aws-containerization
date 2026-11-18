@@ -4,7 +4,7 @@ Description: >
   the load balancer and private subnets for the tasks, VPC endpoints instead of a NAT gateway,
   and every security group. The private subnets have no route to the internet; tasks reach ECR,
   CloudWatch Logs and S3 only through the endpoints.
-  Deployed by CloudFormation Git sync from infrastructure/deployments/dev/network.yaml.
+  Deployed by CloudFormation Git sync from infrastructure/deployments/dev/2-network.yaml.
 
 # Stack 1 of 3 that run the service: network -> service -> pipeline (after the registry stack).
 # Reading order: Parameters -> 1 Network -> 2 Private connectivity -> 3 Security groups -> Outputs

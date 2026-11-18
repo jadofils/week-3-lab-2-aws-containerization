@@ -1,7 +1,7 @@
 # CloudFormation Git sync deployment file for stack "onward-dev-service".
 # Stack order: registry -> network -> service -> pipeline. Needs an image tagged "latest" in ECR.
-# Git sync watches this file and templates/service.yaml on main.
-template-file-path: infrastructure/templates/service.yaml
+# Git sync watches this file and templates/3-service.yaml on main.
+template-file-path: infrastructure/templates/3-service.yaml
 
 parameters:
   Project: onward

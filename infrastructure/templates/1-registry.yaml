@@ -3,7 +3,7 @@ Description: >
   Onward Logistics - Lab 2: image registry and keyless GitHub access. The ECR repository that
   holds every released order-app image, and the IAM role GitHub Actions assumes with OIDC to
   push to it. Created before the order system stack, because ECS cannot start a service
-  until an image exists. Deployed by CloudFormation Git sync from infrastructure/deployments/dev/registry.yaml.
+  until an image exists. Deployed by CloudFormation Git sync from infrastructure/deployments/dev/1-registry.yaml.
 
 # Reading order: Parameters -> 1 Image registry -> 2 Keyless access for GitHub Actions -> Outputs
 #

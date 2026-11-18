@@ -2,7 +2,7 @@
 # Create this stack first: the service and pipeline stacks import the repository it creates,
 # and ECS needs an image in it before the service can start.
 # Stack order: registry -> network -> service -> pipeline. Delete it last: it keeps every image.
-template-file-path: infrastructure/templates/registry.yaml
+template-file-path: infrastructure/templates/1-registry.yaml
 
 parameters:
   Project: onward

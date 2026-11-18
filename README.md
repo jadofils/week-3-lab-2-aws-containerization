@@ -30,21 +30,21 @@ The brief requires application code and infrastructure code in separate reposito
 ```text
 infrastructure/
 ├── templates/                 what each stack creates
-│   ├── gitsync-bootstrap.yaml   one-time Git sync setup (uploaded once)
-│   ├── registry.yaml            ECR repository + GitHub OIDC role
-│   ├── network.yaml             VPC, subnets, routes, VPC endpoints, all security groups
-│   ├── service.yaml             ALB with blue/green target groups, ECS, task roles, scaling, budget
-│   └── pipeline.yaml            EventBridge rule, CodePipeline, CodeBuild Prepare, CodeDeploy, rollback alarm
+│   ├── 0-gitsync-bootstrap.yaml one-time Git sync setup (uploaded once)
+│   ├── 1-registry.yaml          ECR repository + GitHub OIDC role
+│   ├── 2-network.yaml           VPC, subnets, routes, VPC endpoints, all security groups
+│   ├── 3-service.yaml           ALB with blue/green target groups, ECS, task roles, scaling, budget
+│   └── 4-pipeline.yaml          EventBridge rule, CodePipeline, CodeBuild Prepare, CodeDeploy, rollback alarm
 └── deployments/dev/           one Git sync deployment file per stack: template + parameters + tags
-    ├── registry.yaml            → stack onward-dev-registry
-    ├── network.yaml             → stack onward-dev-network
-    ├── service.yaml             → stack onward-dev-service
-    └── pipeline.yaml            → stack onward-dev-pipeline
+    ├── 1-registry.yaml          → stack onward-dev-registry
+    ├── 2-network.yaml           → stack onward-dev-network
+    ├── 3-service.yaml           → stack onward-dev-service
+    └── 4-pipeline.yaml          → stack onward-dev-pipeline
 ```
 
 Git sync links each stack to exactly one deployment file, so there is one per stack. Stacks share values through CloudFormation exports named `onward-dev-<stack>-<value>`. Create them in the order above and delete them in reverse.
 
-Start with the [architecture](docs/architecture/README.md), then read the templates in deployment order: `network.yaml` → `service.yaml` → `pipeline.yaml`. Each keeps the numbered sections (1–7) of the design.
+Start with the [architecture](docs/architecture/README.md), then read the templates in deployment order: `2-network.yaml` → `3-service.yaml` → `4-pipeline.yaml`. Each keeps the numbered sections (1–7) of the design.
 
 ## Diagram
 

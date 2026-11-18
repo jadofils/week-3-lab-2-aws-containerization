@@ -126,5 +126,5 @@ Approximate list prices for `eu-west-1`, On-Demand, Free Tier not applied, taxes
 - **Database changes are not covered.** Orders are held in memory per container in this demonstration. With a real database, schema changes need to work with both blue and green versions.
 - **HTTP only** for the lab. Production needs HTTPS with an ACM certificate.
 - **Region failure is not covered.** The design survives losing one zone, not the whole Region.
-- **Off-hours shutdown means `dev` is not available at night or at weekends.** Turn it off in `infrastructure/deployments/dev/service.yaml` for a review outside working hours.
+- **Off-hours shutdown means `dev` is not available at night or at weekends.** Turn it off in `infrastructure/deployments/dev/3-service.yaml` for a review outside working hours.
 - **Prices are approximate list prices.** Confirm them in the AWS Pricing Calculator before quoting them.

@@ -5,23 +5,23 @@
 Order matters: the service can't start until an image exists ([D3](../decisions/README.md#d3-layered-stacks-registry-first)).
 
 1. **Bootstrap Git sync.** Go to *CloudFormation → Create stack → With new resources*.
-   - Upload `infrastructure/templates/gitsync-bootstrap.yaml` and name the stack `onward-dev-gitsync-bootstrap`.
+   - Upload `infrastructure/templates/0-gitsync-bootstrap.yaml` and name the stack `onward-dev-gitsync-bootstrap`.
    - Acknowledge the IAM capability and create the stack. It creates the connection `onward-dev-github` and the role `onward-dev-gitsync-role`.
 2. **Approve the connection.** Go to *Developer Tools → Settings → Connections → onward-dev-github → Update pending connection*. Authorize the GitHub app for **both** repositories. The status becomes *Available*.
 3. **Registry stack.** Go to *CloudFormation → Create stack → Sync from Git*.
    - Stack `onward-dev-registry`, repository `week-3-lab-2-aws-containerization`, branch `main`.
-   - Deployment file `infrastructure/deployments/dev/registry.yaml`, role `onward-dev-gitsync-role`.
+   - Deployment file `infrastructure/deployments/dev/1-registry.yaml`, role `onward-dev-gitsync-role`.
    - When it finishes, copy the output `GitHubActionsRoleArn`.
 4. **First image.**
    - In `week-3-lab-2-orders-app` on GitHub, open *Settings → Secrets and variables → Actions → Variables*. Add `AWS_ROLE_ARN` (the ARN from step 3) and `AWS_REGION=eu-west-1`. These are variables, not secrets: neither is a credential.
    - Run *Actions → Build and push image → Run workflow* on `main`. ECR now holds `sha-<commit>` and `latest`.
 5. **Network, service and pipeline stacks.** *Sync from Git* again, once per stack, in this order and with the same role. Each waits for the one before:
-   - `onward-dev-network`, deployment file `infrastructure/deployments/dev/network.yaml` (about 3 minutes).
-   - `onward-dev-service`, deployment file `infrastructure/deployments/dev/service.yaml` (about 5 minutes). Its output `ApplicationUrl` is the site.
-   - `onward-dev-pipeline`, deployment file `infrastructure/deployments/dev/pipeline.yaml`.
+   - `onward-dev-network`, deployment file `infrastructure/deployments/dev/2-network.yaml` (about 3 minutes).
+   - `onward-dev-service`, deployment file `infrastructure/deployments/dev/3-service.yaml` (about 5 minutes). Its output `ApplicationUrl` is the site.
+   - `onward-dev-pipeline`, deployment file `infrastructure/deployments/dev/4-pipeline.yaml`.
    - Every later merge to `main` that changes a template or deployment file updates only that stack.
 
-> **Reviewing outside 07:00–20:00 Lagos time on weekdays?** Set `OffHoursShutdown: 'false'` in `infrastructure/deployments/dev/service.yaml` and merge it first; otherwise the service has 0 tasks ([D12](../decisions/README.md#d12-dev-shuts-down-outside-working-hours)).
+> **Reviewing outside 07:00–20:00 Lagos time on weekdays?** Set `OffHoursShutdown: 'false'` in `infrastructure/deployments/dev/3-service.yaml` and merge it first; otherwise the service has 0 tasks ([D12](../decisions/README.md#d12-dev-shuts-down-outside-working-hours)).
 
 ## Step by step checks
 
@@ -171,7 +171,7 @@ while true; do curl -s -m 3 -o /dev/null -w "%{http_code} " "$URL/health"; sleep
 Walk through, in this order:
 1. The two repository READMEs.
 2. The [architecture page](../architecture/README.md): repositories and stacks, then the VPC, the request flow, the release flow and rollback.
-3. The templates in deployment order: `network.yaml`, `service.yaml`, `pipeline.yaml`.
+3. The templates in deployment order: `2-network.yaml`, `3-service.yaml`, `4-pipeline.yaml`.
 4. `build-and-push.yml`.
 
 ## 8. What it costs, including the private connectivity, and which alternatives were rejected
