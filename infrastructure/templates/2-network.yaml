@@ -249,13 +249,13 @@ Resources:
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
-      VpcEndpointType: Interface
+      VpcEndpointType: Interface #network card in the subnets 
       PrivateDnsEnabled: true
       SubnetIds:
         - !Ref PrivateSubnetA
         - !Ref PrivateSubnetB
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
+      SecurityGroupIds:         
+        - !Ref EndpointSecurityGroup  #firewall for the endpoint interfaces, only allows HTTPS from the tasks, that govern who may connect to the endpoints
       Tags:
         - Key: Name
           Value: !Sub '${Project}-${Environment}-orders-ecr-api-vpce'
@@ -267,10 +267,10 @@ Resources:
           Value: !Ref Environment
 
   EcrDockerEndpoint:
-    Type: AWS::EC2::VPCEndpoint
+    Type: AWS::EC2::VPCEndpoint  
     Properties:
       VpcId: !Ref Vpc
-      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr' # docker registry:it serves image manifest and image layers
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
@@ -346,10 +346,10 @@ Resources:
       GroupName: !Sub '${Project}-${Environment}-orders-alb-sg'
       GroupDescription: The only public entry point - HTTP from customers to the load balancer.
       VpcId: !Ref Vpc
-      SecurityGroupIngress:
+      SecurityGroupIngress:  #Allow anyone on the internet to connect to the load balancer on port 80 (HTTP).The containers themselves accept traffic only from the load balancer's security group."
         - Description: Customers and merchants.
           IpProtocol: tcp
-          FromPort: 80
+          FromPort: 80 
           ToPort: 80
           CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
