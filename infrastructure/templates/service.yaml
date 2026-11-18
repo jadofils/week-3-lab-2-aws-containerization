@@ -1,0 +1,496 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics - Lab 2 service: one public Application Load Balancer with blue and green
+  target groups in front of an ECS Fargate service in the private subnets of both Availability
+  Zones. Capacity follows average CPU, dev stops outside working hours, and a monthly budget
+  warns before spend runs away.
+  Deployed by CloudFormation Git sync from infrastructure/deployments/dev/service.yaml.
+
+# Stack 2 of 3: network -> service -> pipeline.
+# Imports the VPC, subnets and security groups (network) and the image repository
+# (registry stack). Requires an image tagged "latest" in that repository.
+# Reading order: Parameters -> Task identities -> 4 Load balancer -> 5 Service and scaling -> 7 Cost guardrail -> Outputs
+#
+# No single failure stops the service:
+#   task dies            -> ALB stops routing to it (3 failed checks), ECS starts a replacement
+#   Availability Zone    -> ALB nodes, endpoint interfaces and tasks exist in both zones; ECS places replacements in the healthy one
+#   bad release          -> handled by the pipeline stack: 10% canary, 5xx alarm rollback, blue kept 15 minutes
+
+Parameters:
+  Project:
+    Type: String
+    Default: onward
+    AllowedPattern: '^[a-z0-9-]{2,12}$'
+  Owner:
+    Type: String
+    Default: Jado Fils SEZIKEYE
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  ApplicationPort:
+    Type: Number
+    Default: 8080
+
+  TaskCpu:
+    Type: String
+    Default: '512'
+    AllowedValues:
+      - '256'
+      - '512'
+      - '1024'
+    Description: Fargate CPU units per task (512 = 0.5 vCPU).
+
+  TaskMemory:
+    Type: String
+    Default: '1024'
+    AllowedValues:
+      - '1024'
+      - '2048'
+    Description: Fargate memory per task in MiB. The JVM uses 75% of it.
+
+  MinTasks:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    Description: At least one task per Availability Zone, so losing a task or a zone is not an outage.
+
+  MaxTasks:
+    Type: Number
+    Default: 6
+    Description: Busy days bring about 3x normal demand; 6 tasks caps peak spend.
+
+  CpuTargetPercent:
+    Type: Number
+    Default: 50
+    MinValue: 20
+    MaxValue: 80
+    Description: Average service CPU that target tracking keeps tasks near.
+
+  OffHoursShutdown:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: When 'true', the service scales to 0 tasks at 20:00 and back up at 07:00 Monday to Friday.
+
+  OffHoursTimezone:
+    Type: String
+    Default: Africa/Lagos
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues:
+      - 7
+      - 14
+      - 30
+      - 90
+
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 150
+
+  BudgetAlertEmail:
+    Type: String
+    Default: ''
+    Description: Optional. When set, a monthly AWS budget emails this address at 80% actual and 100% forecast spend.
+
+Conditions:
+  CreateBudget: !Not
+    - !Equals
+      - !Ref BudgetAlertEmail
+      - ''
+  ShutDownOffHours: !Equals
+    - !Ref OffHoursShutdown
+    - 'true'
+
+Resources:
+  # ============================================================ Task identities
+  # Used by ECS (not the app) to pull the image and write logs. AWS managed policy only.
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-task-execution-role'
+      Description: Lets ECS pull the order image from ECR and send container logs to CloudWatch.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # The app's own identity. It calls no AWS API, so it has no permissions at all.
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-${Environment}-orders-task-role'
+      Description: Identity of the order app container. Deliberately has no permissions.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================ 4. Load balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-alb'
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets:
+        - Fn::ImportValue: !Sub '${Project}-${Environment}-network-public-subnet-a'
+        - Fn::ImportValue: !Sub '${Project}-${Environment}-network-public-subnet-b'
+      SecurityGroups:
+        - Fn::ImportValue: !Sub '${Project}-${Environment}-network-alb-sg-id'
+      LoadBalancerAttributes:
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-alb'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Blue and green are identical. At any time one holds the live tasks; CodeDeploy starts the
+  # next release behind the other one and then switches the listener. Fargate tasks register
+  # by IP address.
+  BlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-blue-tg'
+      VpcId:
+        Fn::ImportValue: !Sub '${Project}-${Environment}-network-vpc-id'
+      TargetType: ip
+      Protocol: HTTP
+      Port: !Ref ApplicationPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      # 3 misses (about 45 s) before a task is pulled, so a task that is merely busy
+      # during a CPU spike is not mistaken for a failed one.
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: load_balancing.algorithm.type
+          Value: round_robin
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-blue-tg'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${Project}-${Environment}-orders-green-tg'
+      VpcId:
+        Fn::ImportValue: !Sub '${Project}-${Environment}-network-vpc-id'
+      TargetType: ip
+      Protocol: HTTP
+      Port: !Ref ApplicationPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: load_balancing.algorithm.type
+          Value: round_robin
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-${Environment}-orders-green-tg'
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # HTTP for the lab demo. Production would add an HTTPS listener with an ACM certificate.
+  # After the first release CodeDeploy owns which target group this forwards to:
+  # do not change this listener in the template, or the live target group could be swapped back.
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup
+
+  # ============================================================ 5. Service and scaling
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${Project}-${Environment}-orders-cluster'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  ServiceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/${Environment}/orders'
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudFormation owns the shape of the task: size, roles, port, logging and environment.
+  # Each release copies the latest revision of this family and only swaps the image
+  # (section 6, Prepare). Changing a property here registers a new revision, which the next
+  # release picks up.
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-${Environment}-orders'
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: orders
+          # Only the first service creation uses "latest"; every release pins an image digest.
+          Image: !Sub
+            - '${RepositoryUri}:latest'
+            - RepositoryUri: !ImportValue
+                Fn::Sub: '${Project}-${Environment}-orders-repository-uri'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ApplicationPort
+              Protocol: tcp
+          Environment:
+            - Name: PORT
+              Value: !Ref ApplicationPort
+            - Name: JAVA_TOOL_OPTIONS
+              Value: -XX:MaxRAMPercentage=75
+            - Name: LOAD_DEMO_ENABLED
+              Value: 'true'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ServiceLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: orders
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Released by CodeDeploy (blue/green), not by ECS rolling updates.
+  # TaskDefinition names the FAMILY, not a revision: the value never changes, so CloudFormation
+  # never tries to change the task definition of a service CodeDeploy controls (it cannot).
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - TaskDefinition
+      - HttpListener
+    Properties:
+      ServiceName: !Sub '${Project}-${Environment}-orders-service'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      TaskDefinition: !Sub '${Project}-${Environment}-orders'
+      DesiredCount: !Ref MinTasks
+      DeploymentController:
+        Type: CODE_DEPLOY
+      # Time for the JVM to start before ALB health checks count.
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - Fn::ImportValue: !Sub '${Project}-${Environment}-network-private-subnet-a'
+            - Fn::ImportValue: !Sub '${Project}-${Environment}-network-private-subnet-b'
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${Project}-${Environment}-network-task-sg-id'
+      LoadBalancers:
+        - ContainerName: orders
+          ContainerPort: !Ref ApplicationPort
+          TargetGroupArn: !Ref BlueTargetGroup
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Keeps MinTasks..MaxTasks running. In dev, optionally stops everything outside working hours,
+  # because Fargate charges nothing while no task runs.
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub 'service/${Cluster}/${Service.Name}'
+      MinCapacity: !Ref MinTasks
+      MaxCapacity: !Ref MaxTasks
+      ScheduledActions: !If
+        - ShutDownOffHours
+        - - ScheduledActionName: !Sub '${Project}-${Environment}-orders-off-hours-stop'
+            Schedule: cron(0 20 * * ? *)
+            Timezone: !Ref OffHoursTimezone
+            ScalableTargetAction:
+              MinCapacity: 0
+              MaxCapacity: 0
+          - ScheduledActionName: !Sub '${Project}-${Environment}-orders-office-hours-start'
+            Schedule: cron(0 7 ? * MON-FRI *)
+            Timezone: !Ref OffHoursTimezone
+            ScalableTargetAction:
+              MinCapacity: !Ref MinTasks
+              MaxCapacity: !Ref MaxTasks
+        - !Ref AWS::NoValue
+
+  # Adds tasks when average CPU rises above the target and removes them when it falls.
+  CpuTargetTrackingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${Project}-${Environment}-orders-cpu-target'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref CpuTargetPercent
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 120
+
+  # ============================================================ 7. Cost guardrail
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${Project}-${Environment}-orders-monthly-budget'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetAlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetAlertEmail
+
+Outputs:
+  ApplicationUrl:
+    Description: The one public address for merchants and customers.
+    Value: !Sub 'http://${LoadBalancer.DNSName}'
+  TaskExecutionRoleArn:
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-task-execution-role-arn'
+  TaskRoleArn:
+    Value: !GetAtt TaskRole.Arn
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-task-role-arn'
+  ClusterName:
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-cluster-name'
+  ServiceName:
+    Value: !GetAtt Service.Name
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-service-name'
+  ListenerArn:
+    Value: !Ref HttpListener
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-listener-arn'
+  BlueTargetGroupName:
+    Value: !GetAtt BlueTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-blue-tg-name'
+  GreenTargetGroupName:
+    Value: !GetAtt GreenTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-green-tg-name'
+  LoadBalancerFullName:
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub '${Project}-${Environment}-service-alb-full-name'

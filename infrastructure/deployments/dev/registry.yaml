@@ -1,7 +1,7 @@
 # CloudFormation Git sync deployment file for stack "onward-dev-registry".
-# Create this stack first: the order system stack imports the repository it creates,
+# Create this stack first: the service and pipeline stacks import the repository it creates,
 # and ECS needs an image in it before the service can start.
-template-file-path: infrastructure/registry.yaml
+template-file-path: infrastructure/templates/registry.yaml
 
 parameters:
   Project: onward

@@ -27,13 +27,24 @@ The brief requires application code and infrastructure code in separate reposito
 
 ## Infrastructure layout
 
-| Path | What it is |
-| --- | --- |
-| `infrastructure/bootstrap/gitsync-bootstrap.yaml` | One-time Git sync setup: GitHub connection and sync role |
-| `infrastructure/registry.yaml` + `registry-deployment.yaml` | Stack `onward-dev-registry`: ECR repository and the GitHub OIDC role |
-| `infrastructure/template.yaml` + `deployment.yaml` | Stack `onward-dev-orders`: network, endpoints, ALB, ECS, scaling and the release pipeline |
+```text
+infrastructure/
+├── templates/                 what each stack creates
+│   ├── gitsync-bootstrap.yaml   one-time Git sync setup (uploaded once)
+│   ├── registry.yaml            ECR repository + GitHub OIDC role
+│   ├── network.yaml             VPC, subnets, routes, VPC endpoints, all security groups
+│   ├── service.yaml             ALB with blue/green target groups, ECS, task roles, scaling, budget
+│   └── pipeline.yaml            EventBridge rule, CodePipeline, CodeBuild Prepare, CodeDeploy, rollback alarm
+└── deployments/dev/           one Git sync deployment file per stack: template + parameters + tags
+    ├── registry.yaml            → stack onward-dev-registry
+    ├── network.yaml             → stack onward-dev-network
+    ├── service.yaml             → stack onward-dev-service
+    └── pipeline.yaml            → stack onward-dev-pipeline
+```
 
-Start with the [architecture](docs/architecture/README.md), then read `template.yaml` top to bottom. It is split into numbered sections.
+Git sync links each stack to exactly one deployment file, so there is one per stack. Stacks share values through CloudFormation exports named `onward-dev-<stack>-<value>`. Create them in the order above and delete them in reverse.
+
+Start with the [architecture](docs/architecture/README.md), then read the templates in deployment order: `network.yaml` → `service.yaml` → `pipeline.yaml`. Each keeps the numbered sections (1–7) of the design.
 
 ## Diagram
 

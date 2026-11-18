@@ -4,7 +4,7 @@ Region `eu-west-1`, environment `dev`. Read this page top to bottom: each sectio
 
 The same design as an editable diagram: [`architecture.drawio`](architecture.drawio), [open in diagrams.net](https://app.diagrams.net/#Hjadofils%2Fweek-3-lab-2-aws-containerization%2Fmain%2Fdocs%2Farchitecture%2Farchitecture.drawio). Page 1 shows the VPC and runtime; page 2 shows the delivery pipeline and how a change flows.
 
-## 1. The two repositories and three stacks
+## 1. The two repositories and the stacks
 
 | Repository | Holds | Deployed by |
 | --- | --- | --- |
@@ -13,11 +13,15 @@ The same design as an editable diagram: [`architecture.drawio`](architecture.dra
 
 | Stack | Template → deployment file | What it creates | Why it is separate |
 | --- | --- | --- | --- |
-| `onward-dev-gitsync-bootstrap` | `infrastructure/bootstrap/gitsync-bootstrap.yaml` (console upload, once) | GitHub connection, Git sync role | Git sync cannot create the connection it depends on. |
-| `onward-dev-registry` | `infrastructure/registry.yaml` → `infrastructure/registry-deployment.yaml` | ECR repository, GitHub OIDC provider, GitHub Actions role and push policy | An image must exist before ECS can start a service ([D3](../decisions/README.md#d3-three-stacks-registry-first)). |
-| `onward-dev-orders` | `infrastructure/template.yaml` → `infrastructure/deployment.yaml` | VPC, endpoints, ALB, ECS, scaling, alarm, CodeDeploy, CodePipeline, CodeBuild, EventBridge rule, budget | Everything that runs and releases the service, readable in one pass in numbered sections. |
+| `onward-dev-gitsync-bootstrap` | `infrastructure/templates/gitsync-bootstrap.yaml` (console upload, once) | GitHub connection, Git sync role | Git sync cannot create the connection it depends on. |
+| `onward-dev-registry` | `templates/registry.yaml` → `deployments/dev/registry.yaml` | ECR repository, GitHub OIDC provider, GitHub Actions role and push policy | An image must exist before ECS can start a service ([D3](../decisions/README.md#d3-layered-stacks-registry-first)). |
+| `onward-dev-network` | `templates/network.yaml` → `deployments/dev/network.yaml` | VPC, subnets, route tables (private: no internet route), VPC endpoints, all security groups | Changes rarely; every traffic rule is readable in one file. |
+| `onward-dev-service` | `templates/service.yaml` → `deployments/dev/service.yaml` | Task roles, ALB, blue/green target groups, listener, ECS cluster, task definition, service, auto scaling, budget | What customers reach and what runs. |
+| `onward-dev-pipeline` | `templates/pipeline.yaml` → `deployments/dev/pipeline.yaml` | 5xx rollback alarm, artifact bucket, CodeDeploy, CodeBuild Prepare, CodePipeline, EventBridge rule | Release machinery; can change or be rebuilt without touching the network or the service. |
 
-`template.yaml` is split into numbered sections: **1 Network → 2 Private connectivity → 3 Security → 4 Load balancer → 5 Service and scaling → 6 Release pipeline → 7 Cost guardrail → Outputs**.
+Paths are under `infrastructure/`. The design keeps its numbered sections across the stacks: **1 Network + 2 Private connectivity + 3 Security groups** (`network`) → **task identities + 4 Load balancer + 5 Service and scaling + 7 Cost guardrail** (`service`) → **6 Release pipeline** (`pipeline`).
+
+Stacks share values through CloudFormation exports named `onward-dev-<stack>-<value>`, for example `onward-dev-network-vpc-id`. Create them in order (registry → network → service → pipeline) and delete them in reverse.
 
 ## 2. Resources inside the VPC: public vs private
 

@@ -1,0 +1,15 @@
+# CloudFormation Git sync deployment file for stack "onward-dev-network".
+# Stack order: registry -> network -> service -> pipeline. Delete in reverse.
+# Git sync watches this file and templates/network.yaml on main; merging a change to either
+# updates the stack. Values not listed use the template defaults (VPC 10.0.0.0/16, two zones).
+template-file-path: infrastructure/templates/network.yaml
+
+parameters:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev
+
+tags:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev

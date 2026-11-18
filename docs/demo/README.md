@@ -2,31 +2,33 @@
 
 ## Build it from the repositories (one time, Region eu-west-1)
 
-Order matters: the service can't start until an image exists ([D3](../decisions/README.md#d3-three-stacks-registry-first)).
+Order matters: the service can't start until an image exists ([D3](../decisions/README.md#d3-layered-stacks-registry-first)).
 
 1. **Bootstrap Git sync.** Go to *CloudFormation → Create stack → With new resources*.
-   - Upload `infrastructure/bootstrap/gitsync-bootstrap.yaml` and name the stack `onward-dev-gitsync-bootstrap`.
+   - Upload `infrastructure/templates/gitsync-bootstrap.yaml` and name the stack `onward-dev-gitsync-bootstrap`.
    - Acknowledge the IAM capability and create the stack. It creates the connection `onward-dev-github` and the role `onward-dev-gitsync-role`.
 2. **Approve the connection.** Go to *Developer Tools → Settings → Connections → onward-dev-github → Update pending connection*. Authorize the GitHub app for **both** repositories. The status becomes *Available*.
 3. **Registry stack.** Go to *CloudFormation → Create stack → Sync from Git*.
    - Stack `onward-dev-registry`, repository `week-3-lab-2-aws-containerization`, branch `main`.
-   - Deployment file `infrastructure/registry-deployment.yaml`, role `onward-dev-gitsync-role`.
+   - Deployment file `infrastructure/deployments/dev/registry.yaml`, role `onward-dev-gitsync-role`.
    - When it finishes, copy the output `GitHubActionsRoleArn`.
 4. **First image.**
    - In `week-3-lab-2-orders-app` on GitHub, open *Settings → Secrets and variables → Actions → Variables*. Add `AWS_ROLE_ARN` (the ARN from step 3) and `AWS_REGION=eu-west-1`. These are variables, not secrets: neither is a credential.
    - Run *Actions → Build and push image → Run workflow* on `main`. ECR now holds `sha-<commit>` and `latest`.
-5. **Service stack.** *Sync from Git* again:
-   - Stack `onward-dev-orders`, deployment file `infrastructure/deployment.yaml`, same role.
-   - It takes about 10 minutes. Every later merge to `main` that changes a template or deployment file updates its stack.
+5. **Network, service and pipeline stacks.** *Sync from Git* again, once per stack, in this order and with the same role. Each waits for the one before:
+   - `onward-dev-network`, deployment file `infrastructure/deployments/dev/network.yaml` (about 3 minutes).
+   - `onward-dev-service`, deployment file `infrastructure/deployments/dev/service.yaml` (about 5 minutes). Its output `ApplicationUrl` is the site.
+   - `onward-dev-pipeline`, deployment file `infrastructure/deployments/dev/pipeline.yaml`.
+   - Every later merge to `main` that changes a template or deployment file updates only that stack.
 
-> **Reviewing outside 07:00–20:00 Lagos time on weekdays?** Set `OffHoursShutdown: 'false'` in `deployment.yaml` and merge it first; otherwise the service has 0 tasks ([D12](../decisions/README.md#d12-dev-shuts-down-outside-working-hours)).
+> **Reviewing outside 07:00–20:00 Lagos time on weekdays?** Set `OffHoursShutdown: 'false'` in `infrastructure/deployments/dev/service.yaml` and merge it first; otherwise the service has 0 tasks ([D12](../decisions/README.md#d12-dev-shuts-down-outside-working-hours)).
 
 ## Step by step checks
 
 Use AWS CloudShell, or AWS CLI v2 with short-lived credentials. First set:
 
 ```bash
-export AWS_REGION=eu-west-1 STACK=onward-dev-orders
+export AWS_REGION=eu-west-1 STACK=onward-dev-service
 export CLUSTER=onward-dev-orders-cluster SERVICE=onward-dev-orders-service PIPELINE=onward-dev-orders-pipeline
 export URL=$(aws cloudformation describe-stacks --stack-name $STACK \
   --query "Stacks[0].Outputs[?OutputKey=='ApplicationUrl'].OutputValue" --output text)
@@ -169,7 +171,7 @@ while true; do curl -s -m 3 -o /dev/null -w "%{http_code} " "$URL/health"; sleep
 Walk through, in this order:
 1. The two repository READMEs.
 2. The [architecture page](../architecture/README.md): repositories and stacks, then the VPC, the request flow, the release flow and rollback.
-3. `template.yaml`, in its numbered sections.
+3. The templates in deployment order: `network.yaml`, `service.yaml`, `pipeline.yaml`.
 4. `build-and-push.yml`.
 
 ## 8. What it costs, including the private connectivity, and which alternatives were rejected
@@ -178,12 +180,12 @@ Walk through the [cost page](../cost/README.md): endpoints vs NAT, off-hours shu
 
 ## 9. The whole setup can be rebuilt from the repositories
 
-1. Disconnect Git sync on `onward-dev-orders` (stack → *Git sync* tab). Empty the artifact bucket (`aws s3 rm s3://onward-dev-orders-artifacts-<account-id> --recursive`), then delete the stack.
-2. Repeat step 5 of the build section. Everything comes back from the templates, the deployment file and the image already in ECR.
+1. Disconnect Git sync on `onward-dev-pipeline`, `onward-dev-service` and `onward-dev-network` (stack → *Git sync* tab). Empty the artifact bucket (`aws s3 rm s3://onward-dev-orders-artifacts-<account-id> --recursive`), then delete the three stacks in that order.
+2. Repeat step 5 of the build section. Everything comes back from the templates, the deployment files and the image already in ECR.
 3. For a full rebuild, delete `onward-dev-registry` too; its repository must be emptied first. Then repeat steps 3–5.
 
 ## After the review: stop the charges
 
-1. Disconnect Git sync on `onward-dev-orders`, so it doesn't recreate the stack. Empty the artifact bucket (output `ArtifactBucketName`), then delete the stack. The ALB and endpoints stop charging.
+1. Disconnect Git sync on `onward-dev-pipeline`, `onward-dev-service` and `onward-dev-network`, so they aren't recreated. Empty the artifact bucket (output `ArtifactBucketName` of `onward-dev-pipeline`), then delete the three stacks in that order. The ALB and endpoints stop charging.
 2. Optionally, keep `onward-dev-registry`. It costs cents and keeps every released image.
 3. Optionally, delete `onward-dev-gitsync-bootstrap`.

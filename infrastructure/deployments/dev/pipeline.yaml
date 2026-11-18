@@ -1,0 +1,19 @@
+# CloudFormation Git sync deployment file for stack "onward-dev-pipeline".
+# Stack order: registry -> network -> service -> pipeline. Delete it first.
+# Git sync watches this file and templates/pipeline.yaml on main.
+template-file-path: infrastructure/templates/pipeline.yaml
+
+parameters:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev
+
+  # Releases: 10% of customers for 5 minutes, then everyone; old version kept 15 minutes.
+  DeploymentConfigName: CodeDeployDefault.ECSCanary10Percent5Minutes
+  BlueRetentionMinutes: '15'
+  LogRetentionDays: '14'
+
+tags:
+  Project: onward
+  Owner: Jado Fils SEZIKEYE
+  Environment: dev

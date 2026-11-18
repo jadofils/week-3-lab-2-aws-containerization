@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Onward Logistics - Lab 2 one-time Git sync bootstrap, deployed once from the CloudFormation
   console as stack onward-dev-gitsync-bootstrap. Creates the GitHub connection and the role
-  CloudFormation Git sync uses to deploy infrastructure/registry.yaml and infrastructure/template.yaml.
+  CloudFormation Git sync uses to deploy the registry, network, service and pipeline stacks.
   Nothing here runs the application.
 
 Parameters:

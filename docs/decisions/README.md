@@ -23,22 +23,30 @@ Each decision gives the choice, the business reason, and the alternatives reject
 
 **Rejected.** One repository with path filters. It is simpler, but it breaks the brief, and one merge could change both the app and its permissions.
 
-## D3. Three stacks, registry first
+## D3. Layered stacks, registry first
 **Decision.**
 - `onward-dev-gitsync-bootstrap`: uploaded once in the console. It holds the GitHub connection and the Git sync role.
 - `onward-dev-registry`: the ECR repository and the GitHub OIDC role.
-- `onward-dev-orders`: everything that runs and releases the service.
+- `onward-dev-network`: VPC, subnets, routes, VPC endpoints and every security group.
+- `onward-dev-service`: task roles, load balancer, ECS cluster and service, auto scaling and the budget.
+- `onward-dev-pipeline`: EventBridge rule, CodePipeline, CodeBuild Prepare, CodeDeploy and the rollback alarm.
 
-The last two are Git-synced from the infrastructure repository.
+Templates live in `infrastructure/templates/` and Git sync deployment files in `infrastructure/deployments/dev/`, one per stack, because Git sync links a stack to exactly one deployment file. All but the bootstrap are Git-synced. Stacks share values through CloudFormation exports (`onward-dev-<stack>-<value>`).
 
 **Reason.**
 - ECS can't start the service until an image exists. A separate registry stack lets the first image be pushed before the service stack is created.
-- Stack order on a rebuild is fixed: bootstrap → registry → first image push → orders.
-- The registry outlives the service: tearing down `onward-dev-orders` to save money keeps every released image.
+- Each layer has its own rate of change: the network rarely changes, and the pipeline can change or be rebuilt without touching what runs. A merge only updates the stack whose files it touches.
+- All traffic rules are in one file (`network.yaml`), so the security review reads one place.
+- Smaller templates, each readable in one sitting.
+- Stack order on a rebuild is fixed: bootstrap → registry → first image push → network → service → pipeline. Delete in reverse.
+- The registry outlives the service: tearing down the other stacks to save money keeps every released image.
+
+**Trade-off.** An exported value can't change while another stack imports it. Replacing a subnet or a target group means updating the importing stack first.
 
 **Rejected.**
-- One stack: its first creation would hang waiting for an image that can't exist yet.
-- Nested stacks: child templates must be uploaded to S3, which is an extra manual step.
+- One stack for everything: its first creation would hang waiting for an image that can't exist yet.
+- One stack for everything that runs (the earlier design): simpler, but a pipeline change and a network change shared one stack.
+- Nested stacks: child templates must be uploaded to S3, which is an extra manual step that Git sync doesn't do.
 - A public placeholder image: tasks can't reach public registries ([D6](#d6-vpc-endpoints-instead-of-a-nat-gateway)).
 
 ## D4. GitHub Actions signs in to AWS with OIDC; no access keys
@@ -112,7 +120,7 @@ The last two are Git-synced from the infrastructure repository.
 
 ## D8. The pipeline copies the task definition CloudFormation registered
 **Decision.**
-- `template.yaml` registers the task definition family `onward-dev-orders`: size, roles, logging, port and environment.
+- `service.yaml` registers the task definition family `onward-dev-orders`: size, roles, logging, port and environment.
 - The ECS service refers to the **family name**, not a revision, so CloudFormation never needs to change the service's task definition after creation.
 - The *Prepare* stage (CodeBuild project `onward-dev-orders-prepare`, buildspec in the template):
   - reads the latest revision of the family;
@@ -169,7 +177,7 @@ The last two are Git-synced from the infrastructure repository.
 - 20:00 every day: min and max set to 0;
 - 07:00 Monday to Friday: back to min 2, max 6.
 
-The schedule is enabled by `OffHoursShutdown: 'true'` in `deployment.yaml`; `test` and `prod` keep it off.
+The schedule is enabled by `OffHoursShutdown: 'true'` in `infrastructure/deployments/dev/service.yaml`; `test` and `prod` keep it off.
 
 **Reason.** "Idle environments should not cost us money." Fargate stops charging when tasks stop, which saves about $22 a month for `dev`. For a review outside working hours, set the parameter to `'false'` and merge.
 
