@@ -1,0 +1,61 @@
+# Checks every pull request and push to main before CloudFormation Git sync deploys it.
+# This workflow needs no AWS access at all: it only reads the repository.
+name: Validate infrastructure
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Scan for hard-coded credentials
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history, so a key added and later deleted is still caught
+
+      # gitleaks matches 150+ credential patterns (AWS access keys, private keys, GitHub tokens,
+      # passwords in URLs ...). --redact keeps any finding out of the public log.
+      - name: gitleaks (all commits)
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.0 \
+            git /repo --redact --verbose --exit-code 1
+
+  templates:
+    name: Lint templates and company rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: cfn-lint
+        run: |
+          pip install --quiet cfn-lint
+          cfn-lint --regions eu-west-1 -- infrastructure/templates/*.yaml
+
+      # Company standard: permissions live in customer managed policies, never inline.
+      - name: No inline IAM policies
+        run: |
+          if grep -rnE '^\s+Policies:|Type:\s*AWS::IAM::Policy\s*$' infrastructure/templates; then
+            echo "::error::Inline IAM policy found. Use AWS::IAM::ManagedPolicy and ManagedPolicyArns."
+            exit 1
+          fi
+          echo "No inline IAM policies."
+
+      # No access keys may be created for anyone: the setup is keyless.
+      - name: No IAM users or access keys
+        run: |
+          if grep -rnE 'Type:\s*AWS::IAM::(User|AccessKey)\s*$' infrastructure/templates; then
+            echo "::error::IAM users or access keys found. Use roles (OIDC, service principals)."
+            exit 1
+          fi
+          echo "No IAM users or access keys."
