@@ -4,6 +4,25 @@ About **$117 a month** with `dev` running all the time, or about **$95** with `d
 
 The working below uses approximate on-demand list prices for `eu-west-1`. Re-check each line in the [AWS Pricing Calculator](https://calculator.aws/) before relying on it. Taxes are excluded, and no Free Tier is assumed, so these are the worst case.
 
+## AWS Pricing Calculator estimate
+
+**[Saved estimate in the AWS Pricing Calculator](https://calculator.aws/#/estimate?id=bc91d51c1383cfdff4475d4979578b77d8aa5860)**: about **$99.41 a month**, `eu-west-1`.
+
+It prices the same services as this page, but some inputs differ from what the templates deploy. Where they differ, the templates are what actually runs:
+
+| Service | Calculator | Templates (this page) | Difference |
+| --- | ---: | ---: | --- |
+| Fargate | 18.01 | 36.04 | The calculator uses 0.25 vCPU / 0.5 GB tasks; `3-service.yaml` runs 0.5 vCPU / 1 GB. |
+| Elastic Load Balancing | 19.57 | 24.24 | The templates allow for 1 LCU on average. |
+| VPC (3 interface endpoints × 2 AZs + 2 public IPv4) | 55.53 | 55.53 | Same. |
+| ECR | 0.50 | 0.30 | The calculator assumes 5 GB stored; the lifecycle rule keeps 15 images (about 3 GB). |
+| S3 (artifact bucket) | 0.03 | (in pipeline line) | Same order of cost. |
+| CloudWatch | 5.57 | 0.87 | The calculator includes Container Insights and 5 alarms. Container Insights is disabled in `3-service.yaml`. |
+| CodePipeline V2 | 0.20 | 0.25 | Same order of cost. |
+| CodeBuild (Prepare step) | not listed | in pipeline line | 1–2 build-minutes per release, mostly in the free tier. |
+| CodeDeploy, EventBridge, Application Auto Scaling, S3 gateway endpoint | not listed | 0.00 | Free for this use. |
+| AWS Budgets | not listed | 0.00 | The first two budgets are free. |
+
 ## Price assumptions
 
 | Item | Price used |
