@@ -6,22 +6,24 @@ The working below uses approximate on-demand list prices for `eu-west-1`. Re-che
 
 ## AWS Pricing Calculator estimate
 
-**[Saved estimate in the AWS Pricing Calculator](https://calculator.aws/#/estimate?id=bc91d51c1383cfdff4475d4979578b77d8aa5860)**: about **$99.41 a month**, `eu-west-1`.
+**[Saved estimate in the AWS Pricing Calculator](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95)**: **$55.95 a month**, `eu-west-1`, with `dev` shut down outside working hours (tasks run about 9.3 hours a day on average).
 
-It prices the same services as this page, but some inputs differ from what the templates deploy. Where they differ, the templates are what actually runs:
+Compared line by line with the "`dev` off outside working hours" column below. Where they differ, the templates are what actually runs:
 
-| Service | Calculator | Templates (this page) | Difference |
+| Service | Calculator ($/month) | Templates ($/month) | Difference |
 | --- | ---: | ---: | --- |
-| Fargate | 18.01 | 36.04 | The calculator uses 0.25 vCPU / 0.5 GB tasks; `3-service.yaml` runs 0.5 vCPU / 1 GB. |
-| Elastic Load Balancing | 19.57 | 24.24 | The templates allow for 1 LCU on average. |
-| VPC (3 interface endpoints × 2 AZs + 2 public IPv4) | 55.53 | 55.53 | Same. |
-| ECR | 0.50 | 0.30 | The calculator assumes 5 GB stored; the lifecycle rule keeps 15 images (about 3 GB). |
-| S3 (artifact bucket) | 0.03 | (in pipeline line) | Same order of cost. |
-| CloudWatch | 5.57 | 0.87 | The calculator includes Container Insights and 5 alarms. Container Insights is disabled in `3-service.yaml`. |
-| CodePipeline V2 | 0.20 | 0.25 | Same order of cost. |
-| CodeBuild (Prepare step) | not listed | in pipeline line | 1–2 build-minutes per release, mostly in the free tier. |
-| CodeDeploy, EventBridge, Application Auto Scaling, S3 gateway endpoint | not listed | 0.00 | Free for this use. |
-| AWS Budgets | not listed | 0.00 | The first two budgets are free. |
+| Fargate (2 tasks, 9.3 h/day) | 27.93 | 13.92 | The calculator uses **1 vCPU / 2 GB** per task; `deployments/dev/3-service.yaml` runs **0.5 vCPU / 1 GB**. |
+| Elastic Load Balancing (1 ALB) | 24.24 | 24.24 | Same. |
+| VPC interface endpoints (ecr.api, ecr.dkr, logs × 2 AZs) | **0.00** | **48.23** | **Not priced in the calculator yet.** This is the private connectivity the Finance Lead asked about. |
+| Public IPv4 (2, for the ALB) | **0.00** | **7.30** | **Not priced in the calculator yet** (0 addresses entered). |
+| ECR (3 GB) | 0.30 | 0.30 | Same. |
+| CloudWatch (logs + 3 alarms) | 2.33 | 0.87 | The calculator also counts 1 high-resolution alarm and extra log types that are not used. |
+| CodePipeline V2 (224 action-minutes) | 0.25 | 0.25 | Same. |
+| CodeBuild (Prepare step) | 0.90 | about 0.00 | The calculator uses `arm1.2xlarge` for 10 minutes; the project uses `BUILD_GENERAL1_SMALL` x86 for about 2 minutes per release, inside the free tier. |
+| S3 (artifact bucket, 0.01 GB) | 0.00 | 0.00 | Same. |
+| EventBridge (ECR events) | 0.00 | 0.00 | Same. |
+| CodeDeploy, Application Auto Scaling, S3 gateway endpoint, Budgets | not listed | 0.00 | Free for this use. |
+| **Total** | **55.95** | **95.27** | Mainly the missing endpoints and IPv4 (+55.53), partly offset by the larger Fargate tasks (−14.01). |
 
 ## Price assumptions
 
