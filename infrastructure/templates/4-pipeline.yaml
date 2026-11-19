@@ -10,6 +10,7 @@ Description: >
 # repository (registry stack).
 # Reading order: Parameters -> 6 Release pipeline -> Outputs
 
+# These are the settings of this stack. The values for dev are set in infrastructure/deployments/dev/4-pipeline.yaml.
 Parameters:
   Project:
     Type: String
@@ -60,6 +61,8 @@ Resources:
   # ============================================================ 6. Release pipeline
   # ECR push (latest) -> EventBridge -> CodePipeline: Source -> Prepare -> Deploy (CodeDeploy blue/green)
 
+  # This alarm counts server errors (HTTP 5xx) returned by the order tasks. Five or more in one minute
+  # puts it in ALARM, and CodeDeploy then stops the release and sends traffic back to the old version.
   # Errors from tasks during a release roll it back automatically (CodeDeploy watches this alarm).
   TargetErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -79,6 +82,8 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
+  # This bucket is the pipeline's private shared folder: each stage saves its files here for the next stage.
+  # Files are encrypted, can never be made public, and are deleted after 30 days.
   # Pipeline artifacts (image details, task definition, appspec). Private, encrypted, short-lived.
   ArtifactBucket:
     Type: AWS::S3::Bucket
@@ -109,6 +114,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This bucket policy refuses every request to the artifact bucket that does not use HTTPS.
   # A resource policy on the bucket (not an IAM inline policy): refuse unencrypted connections.
   ArtifactBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -129,6 +135,8 @@ Resources:
                 aws:SecureTransport: 'false'
 
   # --- CodeDeploy: blue/green with canary, alarm rollback and a blue retention window
+  # This role lets CodeDeploy start the new tasks, switch the load balancer listener and read the rollback alarm.
+  # Only CodeDeploy can use it, and it has the AWS managed policy for ECS deployments only.
   CodeDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -151,6 +159,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This is the CodeDeploy application: the named folder that groups every release of the order app on ECS.
   CodeDeployApplication:
     Type: AWS::CodeDeploy::Application
     Properties:
@@ -164,6 +173,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This deployment group holds the release rules: which service and listener to use, the blue and green
+  # target groups, the 10% canary, automatic rollback on failure or alarm, and how long the old version is kept.
   DeploymentGroup:
     Type: AWS::CodeDeploy::DeploymentGroup
     Properties:
@@ -216,6 +227,7 @@ Resources:
           Value: !Ref Environment
 
   # --- Prepare: turn the latest task definition revision into the files CodeDeploy needs
+  # This log group stores the output of the Prepare step, so you can see what it did, for 14 days.
   PrepareLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -229,6 +241,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This policy lists the only things the Prepare step may do: read the task definition,
+  # read and write files in the artifact bucket, and write its own logs.
   PreparePolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -255,6 +269,7 @@ Resources:
               - logs:PutLogEvents
             Resource: !Sub '${PrepareLogGroup.Arn}:*'
 
+  # This role is the identity of the Prepare step. Only CodeBuild can use it, and it has only the Prepare policy.
   PrepareRole:
     Type: AWS::IAM::Role
     Properties:
@@ -277,6 +292,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This CodeBuild project is the Prepare step. It writes the two files CodeDeploy needs for each release:
+  # taskdef.json (the container recipe with a placeholder for the new image) and appspec.yaml (which container and port).
   # Copies the latest registered revision of the task family (CloudFormation's settings, or the
   # last release), replaces the image with <IMAGE1_NAME> for CodeDeploy to fill with the new
   # image digest, and writes the appspec that names the container and port.
@@ -349,6 +366,8 @@ Resources:
           Value: !Ref Environment
 
   # --- CodePipeline (V2: billed per action-minute, supports stage rollback)
+  # This policy lists the only things the pipeline may do: use the artifact bucket, read the pushed image,
+  # run the Prepare step, start a CodeDeploy release, register the new task definition and hand the task roles to ECS.
   PipelinePolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -409,6 +428,7 @@ Resources:
               StringEquals:
                 iam:PassedToService: ecs-tasks.amazonaws.com
 
+  # This role is the identity of the pipeline. Only CodePipeline can use it, and it has only the pipeline policy.
   PipelineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -431,6 +451,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This pipeline runs every release in three stages: Source (which image) -> Prepare (deployment files)
+  # -> Deploy (CodeDeploy blue/green). It keeps a history of every release, which is used for rollback.
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
@@ -503,6 +525,7 @@ Resources:
           Value: !Ref Environment
 
   # --- EventBridge: a new "latest" image starts the pipeline. GitHub needs no pipeline permission.
+  # This policy allows exactly one action: start this release pipeline.
   EventsPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -516,6 +539,7 @@ Resources:
             Action: codepipeline:StartPipelineExecution
             Resource: !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
 
+  # This role is the identity EventBridge uses to start the pipeline. Only EventBridge can use it.
   EventsRole:
     Type: AWS::IAM::Role
     Properties:
@@ -538,6 +562,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This EventBridge rule watches ECR. When an image tagged latest is pushed successfully, it starts the pipeline,
+  # so merging to main is the only manual step.
   # Matches only "latest", so one merge (which pushes sha-<commit> and latest) starts one release.
   ImagePushedRule:
     Type: AWS::Events::Rule
@@ -565,6 +591,7 @@ Resources:
           Arn: !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
           RoleArn: !GetAtt EventsRole.Arn
 
+# These values are shown after deployment: the pipeline, CodeDeploy names and the artifact bucket.
 Outputs:
   PipelineName:
     Value: !Ref Pipeline
