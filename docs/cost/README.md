@@ -1,111 +1,53 @@
-# Cost: what the design costs, including private connectivity (eu-west-1)
+# Cost: what the design costs (eu-west-1)
 
-About **$117 a month** with `dev` running all the time, or about **$95** with `dev` shut down outside working hours. A month with sales days adds about **$4**. The per-service summary is in the [discovery report](../discovery-report/README.md#what-it-costs).
+**Source of every figure on this page:** [AWS Pricing Calculator estimate](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95), Region Europe (Ireland) `eu-west-1`, On-Demand prices, taxes excluded.
 
-The working below uses approximate on-demand list prices for `eu-west-1`. Re-check each line in the [AWS Pricing Calculator](https://calculator.aws/) before relying on it. Taxes are excluded, and no Free Tier is assumed, so these are the worst case.
+| | USD |
+| --- | ---: |
+| **Total per month** | **55.95** |
+| **Total per year (12 months)** | **671.40** |
+| Upfront | 0.00 |
 
-## AWS Pricing Calculator estimate
+## Cost per service
 
-**[Saved estimate in the AWS Pricing Calculator](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95)**: **$55.95 a month**, `eu-west-1`, with `dev` shut down outside working hours (tasks run about 9.3 hours a day on average).
+| Service | What it is used for | Configuration entered in the calculator | Monthly (USD) |
+| --- | --- | --- | ---: |
+| AWS Fargate | Runs the order app containers | Linux, x86; 2 tasks; 1 vCPU and 2 GB memory per task; 9.3 hours a day on average (`dev` stops outside working hours); 20 GB ephemeral storage | 27.93 |
+| Elastic Load Balancing | The one public entry point (Application Load Balancer) | 1 Application Load Balancer; 25 new connections per second on average | 24.24 |
+| Amazon CloudWatch | Container logs and the alarms used for scaling and rollback | 1 GB standard logs, 1 GB infrequent-access logs, 1 GB vended logs; 1 metric; 3 standard alarms and 1 high-resolution alarm | 2.33 |
+| AWS CodeBuild | The pipeline's Prepare step | On-demand, Linux, `arm1.2xlarge`; 1 build a month, 10 minutes | 0.90 |
+| Amazon ECR | Stores the order app images | 3 GB stored | 0.30 |
+| AWS CodePipeline | Runs Source → Prepare → Deploy for each release | V2 pipeline, 224 action-minutes a month | 0.25 |
+| Amazon S3 | Pipeline artifact bucket (deploy bundles) | S3 Standard, 0.01 GB; 50 PUT and 100 GET requests a month | 0.00 |
+| Amazon EventBridge | Starts the pipeline when a new image is pushed | AWS service events, 1 KB payload | 0.00 |
+| Amazon VPC | Network, public IPv4 and private connectivity | Public IPv4 addresses, as entered | 0.00 |
+| **Total** | | | **55.95** |
 
-Compared line by line with the "`dev` off outside working hours" column below. Where they differ, the templates are what actually runs:
+Where the money goes: **Fargate 50%** and the **load balancer 43%** make up 93% of the monthly cost. Everything for the release pipeline (CodePipeline, CodeBuild, S3, EventBridge) comes to **$1.15** a month.
 
-| Service | Calculator ($/month) | Templates ($/month) | Difference |
-| --- | ---: | ---: | --- |
-| Fargate (2 tasks, 9.3 h/day) | 27.93 | 13.92 | The calculator uses **1 vCPU / 2 GB** per task; `deployments/dev/3-service.yaml` runs **0.5 vCPU / 1 GB**. |
-| Elastic Load Balancing (1 ALB) | 24.24 | 24.24 | Same. |
-| VPC interface endpoints (ecr.api, ecr.dkr, logs × 2 AZs) | **0.00** | **48.23** | **Not priced in the calculator yet.** This is the private connectivity the Finance Lead asked about. |
-| Public IPv4 (2, for the ALB) | **0.00** | **7.30** | **Not priced in the calculator yet** (0 addresses entered). |
-| ECR (3 GB) | 0.30 | 0.30 | Same. |
-| CloudWatch (logs + 3 alarms) | 2.33 | 0.87 | The calculator also counts 1 high-resolution alarm and extra log types that are not used. |
-| CodePipeline V2 (224 action-minutes) | 0.25 | 0.25 | Same. |
-| CodeBuild (Prepare step) | 0.90 | about 0.00 | The calculator uses `arm1.2xlarge` for 10 minutes; the project uses `BUILD_GENERAL1_SMALL` x86 for about 2 minutes per release, inside the free tier. |
-| S3 (artifact bucket, 0.01 GB) | 0.00 | 0.00 | Same. |
-| EventBridge (ECR events) | 0.00 | 0.00 | Same. |
-| CodeDeploy, Application Auto Scaling, S3 gateway endpoint, Budgets | not listed | 0.00 | Free for this use. |
-| **Total** | **55.95** | **95.27** | Mainly the missing endpoints and IPv4 (+55.53), partly offset by the larger Fargate tasks (−14.01). |
+## Services in the design with no line in the estimate
 
-## Price assumptions
+These are part of the design and are not billed for this use, so they do not appear in the estimate: AWS CodeDeploy (ECS blue/green), Amazon ECS (cluster and service, you pay for Fargate), Application Auto Scaling, the S3 gateway endpoint, AWS IAM and the GitHub OIDC provider, AWS CloudFormation and Git sync, AWS CodeConnections, and AWS Budgets. GitHub Actions runs outside AWS.
 
-| Item | Price used |
+## What drives the cost, and how it is kept down
+
+| Cost driver | Control in the design |
 | --- | --- |
-| Fargate, Linux x86 | $0.04048 per vCPU-hour + $0.004445 per GB-hour → one 0.5 vCPU / 1 GB task = **$0.024685 per hour** |
-| Application Load Balancer | $0.0252 per hour + $0.008 per LCU-hour |
-| Interface VPC endpoint | $0.011 per endpoint per AZ per hour + $0.01 per GB processed |
-| S3 gateway endpoint | free |
-| Public IPv4 address | $0.005 per hour |
-| Regional NAT gateway (for comparison) | $0.048 per hour per active AZ + $0.048 per GB |
-| ECR storage | $0.10 per GB-month |
-| CloudWatch Logs / alarms | $0.57 per GB ingested / $0.10 per alarm per month |
-| CodePipeline V2 | $0.002 per action-minute, 100 minutes free each month |
-| CodeDeploy to ECS | free |
-| CodeBuild (`general1.small`) | about $0.005 per build-minute, 100 minutes free each month |
+| Fargate tasks (the largest line) | **Off-hours shutdown** in `dev` (`OffHoursShutdown: 'true'` in `infrastructure/deployments/dev/3-service.yaml`): 0 tasks from 20:00, back at 07:00 Monday to Friday. The estimate's 9.3 hours a day reflects this. **`MaxTasks: 6`** caps the spend on busy days. |
+| Load balancer | Charged by the hour while it exists, even with 0 tasks. To pay nothing, delete the stacks and rebuild them from Git. |
+| CloudWatch | Log retention is 14 days. Container Insights is disabled. |
+| ECR | The lifecycle rule keeps the last 15 released images and removes untagged layers after 7 days. |
+| S3 artifact bucket | Objects expire after 30 days. |
+| Release pipeline | CodePipeline V2 is billed per action-minute, so an idle pipeline costs nothing. |
+| Unexpected spend | **AWS Budgets** emails at 80% of $150 a month actual spend and at 100% forecast (`MonthlyBudgetUsd` and `BudgetAlertEmail` in `infrastructure/deployments/dev/3-service.yaml`). |
 
-## Per-day estimate
+**To pay nothing:** delete `onward-dev-pipeline`, `onward-dev-service` and `onward-dev-network`, in that order (empty the artifact bucket first). Keep `onward-dev-registry` so the images remain, and rebuild from Git when needed.
 
-| Line item | Quiet day (2 tasks all day) | Peak day (2 tasks for 14 h, 6 tasks for 10 h) |
-| --- | --- | --- |
-| Fargate tasks | 48 task-hours → **$1.18** | 28 + 60 = 88 task-hours → **$2.17** |
-| ALB hourly + LCU | $0.60 + $0.19 → **$0.79** | $0.60 + $0.35 (about 3 LCU at peak) → **$0.95** |
-| Interface endpoints (3 × 2 AZs) | 6 × 24 h × $0.011 → **$1.58** | **$1.58** (plus a few cents of data while new tasks pull the image) |
-| Public IPv4 (ALB only) | **$0.24** | **$0.24** |
-| Logs, ECR, alarms, pipeline | **≈ $0.06** | **≈ $0.07** |
-| **Total per day** | **≈ $3.85** | **≈ $5.01** |
+## Alternatives considered
 
-A sales day costs about 30% more than a quiet day, because the extra tasks run only while they are needed.
-
-## Per-month estimate
-
-| Line item | Always on | `dev` off outside working hours |
-| --- | ---: | ---: |
-| Fargate, 2 tasks (730 h vs about 282 h: 07:00–20:00, Monday to Friday) | 36.04 | 13.92 |
-| Fargate, blue/green overlap (about 8 releases × 2 tasks × 25 min) | 0.16 | 0.16 |
-| ALB (730 h + 1 LCU average) | 24.24 | 24.24 |
-| Interface endpoints (3 × 2 AZs × 730 h + about 5 GB) | 48.23 | 48.23 |
-| S3 gateway endpoint | 0.00 | 0.00 |
-| Public IPv4 (2 for the ALB) | 7.30 | 7.30 |
-| ECR (about 3 GB) | 0.30 | 0.30 |
-| CloudWatch (about 1 GB of logs, 3 alarms) | 0.87 | 0.87 |
-| CodePipeline + CodeBuild (about 224 action-minutes, 100 free) | 0.25 | 0.25 |
-| **Quiet month** | **117.39** | **95.27** |
-| Sales days (about 4 days × 4 extra tasks × 10 h = 160 task-hours) | +3.95 | +3.95 |
-| **Month with sales days** | **121.34** | **99.22** |
-
-## What the private connectivity costs (Finance Lead)
-
-| Option | Monthly | Data path | App has an internet path? |
-| --- | ---: | --- | --- |
-| **Chosen:** 3 interface endpoints in 2 AZs + S3 gateway endpoint | **≈ $48** | AWS network only | **No** |
-| Regional NAT gateway in 2 AZs + 2 public IPs | ≈ $77 + $0.048 per GB | Through the internet gateway | Yes |
-| Interface endpoints in one AZ only | ≈ $24 | AWS network only | No, but image pulls and logging fail if that zone is lost |
-
-- **Private connectivity is about 41% of the always-on bill.** It is a fixed hourly cost that does not depend on traffic. It is what lets containers pull images and write logs with no route to the internet.
-- **It is about $29 a month cheaper than a NAT gateway**, and it removes the internet path the Head of Security does not want.
-- **Each extra endpoint costs about $16 a month** (2 AZs). That is why only the four that Fargate actually needs exist ([D6](../decisions/README.md#d6-vpc-endpoints-instead-of-a-nat-gateway)).
-
-## What the release pipeline costs
-
-- **CodePipeline V2** charges only while actions run. One release takes about 28 action-minutes: source 1, prepare 2, deploy about 25 (canary 5, blue retention 15, start-up). With 100 free minutes, eight releases a month cost about $0.25.
-- **CodeDeploy for ECS** is free. **CodeBuild** uses about 1–2 minutes per release.
-- **Blue/green overlap** doubles the tasks for about 25 minutes per release: about 2 cents each.
-- **GitHub Actions** is free for public repositories.
-
-An idle pipeline costs nothing, which meets "idle environments should not cost us money" for the delivery tooling too.
-
-## Alternatives considered on cost
-
-| Option | Cost vs chosen | Why rejected |
-| --- | --- | --- |
-| NAT gateway instead of endpoints | About +$29 per month | More expensive, and it gives the app an internet path. |
-| Fargate Spot | About −70% on task cost | Tasks can be interrupted at short notice, which works against "never see an outage". |
-| Graviton (ARM) Fargate | About −20% on task cost | Needs multi-architecture image builds. It's a good next step. |
-| Fixed 6 tasks all month | About +$72 per month | Pays for peak capacity that sits idle most days. |
-| CodePipeline V1 | About $1 per month per pipeline | Similar cost, but no stage rollback ([D10](../decisions/README.md#d10-rolling-back-after-the-blue-window-codepipeline-stage-rollback)). |
-
-## Keeping cost under control
-
-- **Off-hours shutdown** for `dev` (`OffHoursShutdown` in `infrastructure/deployments/dev/3-service.yaml`).
-- **`MaxCapacity: 6`** caps the worst-case task spend.
-- **ECR lifecycle rule** keeps 15 images. **Log retention** is 14 days. **Artifact bucket** objects expire after 30 days.
-- **Budget alert:** `BudgetAlertEmail` in `infrastructure/deployments/dev/3-service.yaml` emails at 80% of $150 a month actual spend and at 100% forecast.
-- **To pay nothing:** delete `onward-dev-pipeline`, `onward-dev-service` and `onward-dev-network`, in that order (the ALB and endpoints go with them). Keep `onward-dev-registry`, so the images remain, and rebuild from Git when needed.
+| Option | Why rejected |
+| --- | --- |
+| NAT gateway instead of VPC endpoints | It gives the app a path to the internet, which the Head of Security does not allow. |
+| Fargate Spot | Tasks can be interrupted at short notice, which works against "customers never see an outage". |
+| Fixed 6 tasks all month | Pays for peak capacity that sits idle most days; Auto Scaling adds tasks only when needed. |
+| CodePipeline V1 | No stage rollback ([D10](../decisions/README.md#d10-rolling-back-after-the-blue-window-codepipeline-stage-rollback)). |

@@ -44,7 +44,7 @@ Onward Logistics needs every approved change to its order system to reach custom
 - [AWS CodePipeline: pipeline types and stage rollback](https://docs.aws.amazon.com/codepipeline/latest/userguide/pipeline-types-planning.html)
 - [Amazon ECR: preventing image tags from being overwritten](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html)
 - [CloudFormation Git sync](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/git-sync.html)
-- [AWS PrivateLink pricing](https://aws.amazon.com/privatelink/pricing/), [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/), [AWS CodePipeline pricing](https://aws.amazon.com/codepipeline/pricing/)
+- [AWS Pricing Calculator estimate for this design](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95)
 
 ## 2. The business value of your solution
 
@@ -62,7 +62,7 @@ Onward Logistics needs every approved change to its order system to reach custom
 - **Survives failures and peaks.**
   - At least two containers run, one in each of two zones. Failed containers are replaced automatically.
   - On busy days the service grows from 2 up to 6 containers when CPU is high, and shrinks afterwards.
-- **Readable and rebuildable.** Two repositories, three short CloudFormation templates and one numbered architecture page. Everything is deployed by Git sync and can be rebuilt from Git.
+- **Readable and rebuildable.** Two repositories, numbered CloudFormation templates (a one-time bootstrap, then registry → network → service → pipeline) and one architecture page. Everything is deployed by Git sync and can be rebuilt from Git.
 
 This suits Onward better than rolling updates because customers never see a half-released version and going back takes seconds, not a new deployment. It suits them better than manual releases because nobody holds keys and nobody logs in to deploy.
 
@@ -73,7 +73,7 @@ This suits Onward better than rolling updates because customers never see a half
 | Amazon ECS with AWS Fargate | Runs the order app containers (0.5 vCPU, 1 GB each) in private subnets, in two zones. | No servers to patch. Billed per second only while containers run, which supports scaling down and off-hours shutdown. |
 | Application Load Balancer | The single public address. It has two target groups (blue and green) and one listener that CodeDeploy switches between them. | Makes zero-downtime traffic shifting possible, and health-checks `/health`. |
 | Amazon ECR | Stores the versioned images. Tags are immutable, except `latest`, which marks the release. Scan on push is on, and a lifecycle rule keeps the last 15 images. | Private registry reachable through VPC endpoints. Each release is pinned by digest, so a deployed version can't change underneath. |
-| VPC endpoints (`ecr.api`, `ecr.dkr`, `logs` interface; `s3` gateway) | Private connectivity from containers to the AWS services they need. | Meets "no path to the internet". It is cheaper than a NAT gateway and keeps traffic on AWS's network. |
+| VPC endpoints (`ecr.api`, `ecr.dkr`, `logs` interface; `s3` gateway) | Private connectivity from containers to the AWS services they need. | Meets "no path to the internet": traffic stays on AWS's network, and unlike a NAT gateway it gives the app no route to the internet. |
 | GitHub Actions + IAM OIDC identity provider | Tests, builds and pushes the image, and signs in to AWS with a short-lived token. | No AWS keys stored in GitHub. The role trusts only the `main` branch of the application repository and may only push to one ECR repository. |
 | Amazon EventBridge | Turns "a new `latest` image was pushed" into "start the pipeline". | Required by the brief. It decouples the app repository from the pipeline: GitHub needs no permission on CodePipeline. |
 | AWS CodePipeline (V2) + AWS CodeBuild | Takes the new image, prepares the deployment files, and hands them to CodeDeploy. | Every release is recorded, and stage rollback redeploys the last good release. V2 is billed per minute, so an idle pipeline costs nothing. |
@@ -81,32 +81,30 @@ This suits Onward better than rolling updates because customers never see a half
 | Application Auto Scaling | Keeps 2–6 containers, targets 50% average CPU, and stops `dev` containers outside working hours. | Grows on busy days and shrinks afterwards with no one adjusting anything. Idle `dev` time costs nothing for compute. |
 | Amazon CloudWatch | Container logs (14-day retention), CPU metrics for scaling, and the 5xx alarm that triggers rollback. | Gives the evidence for every check, and turns "errors are rising" into an automatic rollback. |
 | AWS IAM (customer managed and AWS managed policies only) | One role per job: GitHub, task execution, pipeline, build, deployment, EventBridge and Git sync. | Least privilege and no inline policies (brief and client standard). |
-| AWS CloudFormation + Git sync | Three templates deployed from the infrastructure repository. | Nothing is clicked in the console, and every change is reviewed in Git. |
+| AWS CloudFormation + Git sync | Four stacks (registry, network, service, pipeline) deployed from the infrastructure repository, after a one-time bootstrap stack. | Nothing is clicked in the console, and every change is reviewed in Git. |
 | AWS Budgets | Monthly budget with email alerts at 80% actual and 100% forecast. | Spend stays visible (client standard). |
 
 ### What it costs
 
-Approximate list prices for `eu-west-1`, On-Demand, Free Tier not applied, taxes excluded. The working is on the [cost page](../cost/README.md).
+All figures come from the [AWS Pricing Calculator estimate](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95): Region `eu-west-1`, On-Demand prices, taxes excluded. The [cost page](../cost/README.md) gives the configuration entered for each service.
 
-| Service | Configuration | Quiet month (USD) | Month with sales days (USD) |
-| --- | --- | ---: | ---: |
-| Fargate: always-on containers | 2 tasks × 0.5 vCPU / 1 GB × 730 h | 36.04 | 36.04 |
-| Fargate: sales-day containers | Up to 4 more tasks for about 4 days × 10 h (160 task-hours) | 0.00 | 3.95 |
-| Fargate: blue/green overlap | About 8 releases × 2 extra tasks × 25 min | 0.16 | 0.16 |
-| Application Load Balancer | 1 ALB, about 1 LCU average | 24.24 | 24.24 |
-| **Private connectivity:** interface endpoints | 3 endpoints × 2 AZs × 730 h, about 5 GB processed | 48.23 | 48.23 |
-| **Private connectivity:** S3 gateway endpoint | Gateway endpoint | 0.00 | 0.00 |
-| Public IPv4 addresses | 2, both for the ALB; containers have none | 7.30 | 7.30 |
-| Amazon ECR | About 3 GB stored (15 images) | 0.30 | 0.30 |
-| CloudWatch | About 1 GB of logs, 3 alarms | 0.87 | 0.87 |
-| CodePipeline V2 + CodeBuild + CodeDeploy | About 8 releases × 28 action-minutes (100 free) | 0.25 | 0.25 |
-| AWS Budgets, EventBridge, GitHub Actions (public repo) | | 0.00 | 0.00 |
-| **Total per month, always on** | | **117.39** | **121.34** |
-| **Total per month, `dev` off outside working hours** | Tasks run about 282 h instead of 730 h | **95.27** | **99.22** |
+| Service | Configuration in the estimate | Monthly (USD) |
+| --- | --- | ---: |
+| AWS Fargate | 2 tasks, 1 vCPU / 2 GB each, 9.3 hours a day (`dev` off outside working hours) | 27.93 |
+| Elastic Load Balancing | 1 Application Load Balancer | 24.24 |
+| Amazon CloudWatch | Logs and alarms | 2.33 |
+| AWS CodeBuild | Prepare step | 0.90 |
+| Amazon ECR | 3 GB of images | 0.30 |
+| AWS CodePipeline | V2, 224 action-minutes | 0.25 |
+| Amazon S3 | Artifact bucket, 0.01 GB | 0.00 |
+| Amazon EventBridge | Image-pushed events | 0.00 |
+| Amazon VPC | Public IPv4, as entered | 0.00 |
+| **Total per month** | | **55.95** |
+| **Total per year** | | **671.40** |
 
-- **Private connectivity costs about $48 a month**, roughly 41% of the always-on bill. A Regional NAT gateway in two zones would cost about $77 a month and would also give the app a path to the internet. Endpoints are both cheaper and safer here.
-- **Idle `dev` time costs no compute.** Shutting the containers down outside working hours saves about $22 a month. Deleting the stack between projects removes the fixed costs (ALB and endpoints) as well, and it can be rebuilt from Git.
-- **Releases are almost free.** Pipeline, build and deployment come to well under $1 a month at weekly releases.
+- **Compute and the load balancer are 93% of the cost** (Fargate $27.93, ALB $24.24).
+- **Idle `dev` time costs no compute.** The estimate prices Fargate at 9.3 hours a day because the service stops at 20:00 and starts at 07:00 on weekdays.
+- **Releases are almost free.** CodePipeline, CodeBuild, S3 and EventBridge together come to $1.15 a month, and CodeDeploy for ECS has no charge.
 
 ### Who benefits, and how you will know
 
@@ -115,16 +113,16 @@ Approximate list prices for `eu-west-1`, On-Demand, Free Tier not applied, taxes
 | Chief Technology Officer | Merging is the only manual step; releases cause no outage and can be undone quickly. | A merge produces a new version on the page within about 15 minutes, with no one logged in. A request loop shows only `200` during the release. Rolling back takes under a minute. |
 | Head of Security | No long-lived keys, one public entry point, and no internet path from the app. | No IAM user access keys exist, and GitHub has only a role ARN. Container subnets' route table has no `0.0.0.0/0` route, and tasks have no public IP. |
 | Head of Operations | Failed containers and lost zones are handled automatically, and capacity follows demand. | Stopping a task: a new one starts and the page keeps answering. During a CPU spike the task count rises towards 6, then falls back to 2. |
-| Finance Lead | Knows what the private connectivity costs, and idle `dev` time costs no compute. | The [cost page](../cost/README.md) shows the endpoints versus NAT. Running tasks show 0 outside working hours. Budget alerts arrive at 80% of the limit. |
+| Finance Lead | Knows what each service costs, and idle `dev` time costs no compute. | The [cost page](../cost/README.md) lists every service from the AWS Pricing Calculator estimate. Running tasks show 0 outside working hours. Budget alerts arrive at 80% of the limit. |
 | Engineers | Release by merging, and find their way around from the docs. | A new engineer follows the [architecture page](../architecture/README.md) and the repository READMEs to a successful release without a guided tour. |
 
 ### Limits and risks of your design
 
-- **Fixed costs remain while the stack exists.** The ALB and the interface endpoints charge by the hour even with zero containers. To pay nothing, delete the stack and rebuild it from Git.
+- **Fixed costs remain while the stacks exist.** The load balancer charges by the hour even with zero containers. To pay nothing, delete the stacks and rebuild them from Git.
 - **Auto Scaling and CodeDeploy can conflict.** AWS documents that a scaling event during a blue/green deployment can make the deployment fail. The failed deployment rolls back safely, and the pipeline can be rerun.
 - **Rollback after the 15-minute window is a redeploy.** It takes as long as a normal release (about 10 minutes), not seconds.
 - **Database changes are not covered.** Orders are held in memory per container in this demonstration. With a real database, schema changes need to work with both blue and green versions.
 - **HTTP only** for the lab. Production needs HTTPS with an ACM certificate.
 - **Region failure is not covered.** The design survives losing one zone, not the whole Region.
 - **Off-hours shutdown means `dev` is not available at night or at weekends.** Turn it off in `infrastructure/deployments/dev/3-service.yaml` for a review outside working hours.
-- **Prices are approximate list prices.** Confirm them in the [AWS Pricing Calculator estimate](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95) before quoting them. The [cost page](../cost/README.md#aws-pricing-calculator-estimate) explains where its inputs differ from the templates.
+- **Costs are an estimate.** They come from the [AWS Pricing Calculator estimate](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95); the real bill depends on traffic, logs and the number of releases.

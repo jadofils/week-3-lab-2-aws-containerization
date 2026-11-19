@@ -93,12 +93,12 @@ Templates live in `infrastructure/templates/` and Git sync deployment files in `
 - It meets "the application itself must have no path to the internet: traffic to AWS services stays on AWS's network", and the brief requires endpoints.
 - These four are exactly what a Fargate task needs: `ecr.api` and `ecr.dkr` to pull the image, S3 for the image layers, and `logs` for the `awslogs` driver.
 - Fargate tasks don't need ECS endpoints. The app calls no other AWS service.
-- **Cost:** about $48 a month for the three interface endpoints in two zones. A Regional NAT in two zones would cost about $77 ([cost page](../cost/README.md)). The S3 gateway endpoint is free.
+- **Cost:** interface endpoints are billed per hour in each zone; the S3 gateway endpoint is free. See the [cost page](../cost/README.md).
 
 **Rejected.**
 - A NAT gateway: it gives the app an internet path, and it costs more.
 - Endpoints in one zone only: they stop working if that zone is lost.
-- Extra endpoints such as `ssm`, `ssmmessages` and `secretsmanager`: nothing uses them, and each costs about $16 a month.
+- Extra endpoints such as `ssm`, `ssmmessages` and `secretsmanager`: nothing uses them, and each one adds an hourly charge in both zones.
 
 ## D7. EventBridge starts the pipeline when `latest` is pushed; releases are pinned by digest
 **Decision.**
@@ -179,7 +179,7 @@ Templates live in `infrastructure/templates/` and Git sync deployment files in `
 
 The schedule is enabled by `OffHoursShutdown: 'true'` in `infrastructure/deployments/dev/3-service.yaml`; `test` and `prod` keep it off.
 
-**Reason.** "Idle environments should not cost us money." Fargate stops charging when tasks stop, which saves about $22 a month for `dev`. For a review outside working hours, set the parameter to `'false'` and merge.
+**Reason.** "Idle environments should not cost us money." Fargate stops charging when tasks stop; the [cost estimate](../cost/README.md) prices Fargate at 9.3 hours a day for this reason. For a review outside working hours, set the parameter to `'false'` and merge.
 
 **Rejected.** Deleting and recreating the stack every night: slower, and the endpoints and ALB would be rebuilt daily. That remains the right move for long idle periods.
 
