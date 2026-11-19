@@ -8,7 +8,7 @@
 | Application stack | Java 21, Spring Boot, single full-stack application in one container image |
 | AWS Region | `eu-west-1` (Ireland); see [decision D1](../decisions/README.md#d1-region-eu-west-1) |
 
-## 1. What you found
+## 1. What I found
 
 ### The client's need
 
