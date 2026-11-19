@@ -16,6 +16,7 @@ Description: >
 #   Availability Zone    -> ALB nodes, endpoint interfaces and tasks exist in both zones; ECS places replacements in the healthy one
 #   bad release          -> handled by the pipeline stack: 10% canary, 5xx alarm rollback, blue kept 15 minutes
 
+# These are the settings of this stack. The values for dev are set in infrastructure/deployments/dev/3-service.yaml.
 Parameters:
   Project:
     Type: String
@@ -101,6 +102,7 @@ Parameters:
     Default: ''
     Description: Optional. When set, a monthly AWS budget emails this address at 80% actual and 100% forecast spend.
 
+# These switches turn optional resources on or off: the budget (only when an email is given) and the off-hours schedule.
 Conditions:
   CreateBudget: !Not
     - !Equals
@@ -112,7 +114,8 @@ Conditions:
 
 Resources:
   # ============================================================ Task identities
-  # Used by ECS (not the app) to pull the image and write logs. AWS managed policy only.
+  # This role gives the ECS task execution process permission to perform operations required to start and run the container:
+  # pull the image from ECR and send container logs to CloudWatch. Only ECS in this account can use it. AWS managed policy only.
   TaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -138,7 +141,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # The app's own identity. It calls no AWS API, so it has no permissions at all.
+  # This is the identity assigned to the application container itself. The app calls no AWS API,
+  # so the role deliberately has no permissions (least privilege).
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -163,6 +167,8 @@ Resources:
           Value: !Ref Environment
 
   # ============================================================ 4. Load balancer
+  # This is the one public entry point for customers. It runs in the public subnets of both zones,
+  # and its security group allows HTTP in from the internet and only port 8080 out to the tasks.
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -188,6 +194,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This target group is the list of healthy tasks that can receive traffic. It checks /health on each task
+  # and sends requests only to the tasks that answer 200.
   # Blue and green are identical. At any time one holds the live tasks; CodeDeploy starts the
   # next release behind the other one and then switches the listener. Fargate tasks register
   # by IP address.
@@ -224,6 +232,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This is the second, identical target group. CodeDeploy starts each new release here, then moves traffic to it.
   GreenTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -255,6 +264,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This listener receives customer requests on port 80 and forwards them to the live target group.
+  # CodeDeploy switches it between blue and green during a release.
   # HTTP for the lab demo. Production would add an HTTPS listener with an ACM certificate.
   # After the first release CodeDeploy owns which target group this forwards to:
   # do not change this listener in the template, or the live target group could be swapped back.
@@ -269,6 +280,7 @@ Resources:
           TargetGroupArn: !Ref BlueTargetGroup
 
   # ============================================================ 5. Service and scaling
+  # This cluster is the logical group that the order service runs in. Fargate provides the servers.
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -284,6 +296,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This log group stores the container logs (what the app prints) for 14 days, then deletes them.
   ServiceLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -297,6 +310,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This task definition is the recipe for one container: image, CPU and memory, port, environment and logging.
   # CloudFormation owns the shape of the task: size, roles, port, logging and environment.
   # Each release copies the latest revision of this family and only swaps the image
   # (section 6, Prepare). Changing a property here registers a new revision, which the next
@@ -347,6 +361,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This service keeps the required number of tasks running in the private subnets of both zones, with no public IP,
+  # registers them with the load balancer and replaces any task that fails.
   # Released by CodeDeploy (blue/green), not by ECS rolling updates.
   # TaskDefinition names the FAMILY, not a revision: the value never changes, so CloudFormation
   # never tries to change the task definition of a service CodeDeploy controls (it cannot).
@@ -388,6 +404,8 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # This registers the service with Application Auto Scaling: it may run between MinTasks and MaxTasks,
+  # and in dev it scales to 0 at 20:00 and back up at 07:00 on weekdays.
   # Keeps MinTasks..MaxTasks running. In dev, optionally stops everything outside working hours,
   # because Fargate charges nothing while no task runs.
   ServiceScalableTarget:
@@ -414,6 +432,7 @@ Resources:
               MaxCapacity: !Ref MaxTasks
         - !Ref AWS::NoValue
 
+  # This scaling rule keeps average CPU near the target: it adds tasks when CPU is high and removes them when it falls.
   # Adds tasks when average CPU rises above the target and removes them when it falls.
   CpuTargetTrackingPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
@@ -429,6 +448,7 @@ Resources:
         ScaleInCooldown: 120
 
   # ============================================================ 7. Cost guardrail
+  # This budget emails an alert when actual spend passes 80% of the monthly limit, or forecast spend passes 100%.
   MonthlyBudget:
     Type: AWS::Budgets::Budget
     Condition: CreateBudget
@@ -458,6 +478,7 @@ Resources:
             - SubscriptionType: EMAIL
               Address: !Ref BudgetAlertEmail
 
+# These values are shared with other stacks (Export) or shown to people: the public URL and the names the pipeline needs.
 Outputs:
   ApplicationUrl:
     Description: The one public address for merchants and customers.
