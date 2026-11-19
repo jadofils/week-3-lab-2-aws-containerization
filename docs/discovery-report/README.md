@@ -40,13 +40,13 @@ Onward Logistics needs every approved change to its order system to reach custom
 - [Amazon ECS: CodeDeploy blue/green deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-bluegreen.html)
 - [Amazon ECS: interface VPC endpoints](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/vpc-endpoints.html)
 - [Amazon ECR: interface VPC endpoints](https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html)
-- [GitHub: configuring OpenID Connect in Amazon Web Services](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services)
+- [GitHub: configuring OpenID Connect in Amazon Web Services](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-the-deployments/configuring-openid-connect-in-amazon-web-services)
 - [AWS CodePipeline: pipeline types and stage rollback](https://docs.aws.amazon.com/codepipeline/latest/userguide/pipeline-types-planning.html)
 - [Amazon ECR: preventing image tags from being overwritten](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html)
 - [CloudFormation Git sync](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/git-sync.html)
 - [AWS Pricing Calculator estimate for this design](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95)
 
-## 2. The business value of your solution
+## 2. The business value of the solution
 
 ### Your chosen approach
 
@@ -116,7 +116,7 @@ All figures come from the [AWS Pricing Calculator estimate](https://calculator.a
 | Finance Lead | Knows what each service costs, and idle `dev` time costs no compute. | The [cost page](../cost/README.md) lists every service from the AWS Pricing Calculator estimate. Running tasks show 0 outside working hours. Budget alerts arrive at 80% of the limit. |
 | Engineers | Release by merging, and find their way around from the docs. | A new engineer follows the [architecture page](../architecture/README.md) and the repository READMEs to a successful release without a guided tour. |
 
-### Limits and risks of your design
+### Limits and risks of the design
 
 - **Fixed costs remain while the stacks exist.** The load balancer charges by the hour even with zero containers. To pay nothing, delete the stacks and rebuild them from Git.
 - **Auto Scaling and CodeDeploy can conflict.** AWS documents that a scaling event during a blue/green deployment can make the deployment fail. The failed deployment rolls back safely, and the pipeline can be rerun.
