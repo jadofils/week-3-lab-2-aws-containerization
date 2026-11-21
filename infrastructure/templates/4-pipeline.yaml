@@ -363,10 +363,9 @@ Resources:
               Configuration:
                 ApplicationName: !Ref CodeDeployApplication
                 DeploymentGroupName: !Ref DeploymentGroup
+                # taskdef.json and appspec.yaml inside deploy-bundle.zip (the action's default file names).
                 TaskDefinitionTemplateArtifact: DeployArtifact
-                TaskDefinitionTemplatePath: taskdef.json
                 AppSpecTemplateArtifact: DeployArtifact
-                AppSpecTemplatePath: appspec.yaml
                 Image1ArtifactName: ImageArtifact
                 Image1ContainerName: IMAGE1_NAME
               InputArtifacts:
