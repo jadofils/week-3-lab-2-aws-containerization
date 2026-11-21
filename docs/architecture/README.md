@@ -8,7 +8,7 @@ The same design as an editable diagram: [`architecture.drawio`](architecture.dra
 
 | Repository | Holds | Deployed by |
 | --- | --- | --- |
-| **Application** ([`week-3-lab-2-orders-app`](https://github.com/jadofils/week-3-lab-2-orders-app)) | `app/` (Spring Boot), `Dockerfile`, `.github/workflows/build-and-push.yml` | GitHub Actions → Amazon ECR → EventBridge → CodePipeline → CodeDeploy |
+| **Application** ([`week-3-lab-2-orders-app`](https://github.com/jadofils/week-3-lab-2-orders-app)) | `app/` (Spring Boot), `Dockerfile`, `.github/workflows/ci.yml` (CI) and `.github/workflows/build-and-push.yml` (CD) | GitHub Actions CI → CD → Amazon ECR → EventBridge → CodePipeline → CodeDeploy |
 | **Infrastructure** ([`week-3-lab-2-aws-containerization`](https://github.com/jadofils/week-3-lab-2-aws-containerization)) | `infrastructure/` (CloudFormation), `docs/` | CloudFormation Git sync |
 
 | Stack | Template → deployment file | What it creates | Why it is separate |
@@ -108,7 +108,7 @@ sequenceDiagram
 flowchart LR
   dev([Engineer merges PR to main<br/>application repository]) --> gha
   subgraph gh["GitHub"]
-    gha["GitHub Actions<br/>mvn verify · docker build"]
+    gha["GitHub Actions<br/>CI: scan · mvn verify · image builds<br/>→ CD (only if CI passed): docker build + push"]
   end
   gha -->|"OIDC token → sts:AssumeRoleWithWebIdentity<br/>(no stored keys)"| ecr[("Amazon ECR · onward-dev-orders<br/>tags: sha-‹commit› + latest")]
   ecr -->|"ECR Image Action: PUSH SUCCESS, tag latest"| eb["EventBridge rule<br/>onward-dev-orders-image-pushed"]
@@ -122,7 +122,7 @@ flowchart LR
 
 Step by step:
 
-1. **Merge.** On `main`, `build-and-push.yml` runs the tests and builds the image.
+1. **Merge.** On every push and pull request, **CI** (`ci.yml`) scans for credentials, runs the tests and checks that the image builds. It has no AWS access. Only when CI passes on `main` does it trigger **CD** (`build-and-push.yml`), which builds exactly the commit CI tested.
 2. **Push.**
    - GitHub issues a short-lived OIDC token. AWS exchanges it for temporary credentials on `onward-dev-github-actions-role`.
    - The role trusts only `repo:jadofils@114186160/week-3-lab-2-orders-app@1460005073:ref:refs/heads/main` (GitHub's immutable subject: owner and repository names with their permanent numeric IDs).

@@ -22,7 +22,7 @@ The brief requires application code and infrastructure code in separate reposito
 
 | Repository | Holds | Deployed by |
 | --- | --- | --- |
-| [week-3-lab-2-orders-app](https://github.com/jadofils/week-3-lab-2-orders-app) | `app/` (Spring Boot), `Dockerfile`, `.github/workflows/build-and-push.yml` | GitHub Actions → ECR → EventBridge → CodePipeline → CodeDeploy |
+| [week-3-lab-2-orders-app](https://github.com/jadofils/week-3-lab-2-orders-app) | `app/` (Spring Boot), `Dockerfile`, `.github/workflows/ci.yml` (CI) and `.github/workflows/build-and-push.yml` (CD) | GitHub Actions CI → CD → ECR → EventBridge → CodePipeline → CodeDeploy |
 | [week-3-lab-2-aws-containerization](https://github.com/jadofils/week-3-lab-2-aws-containerization) (this one) | `infrastructure/` (CloudFormation), `docs/` | CloudFormation Git sync |
 
 ## Infrastructure layout

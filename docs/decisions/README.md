@@ -219,7 +219,7 @@ The schedule is enabled by `OffHoursShutdown: 'true'` in `infrastructure/deploym
 
 ## D16. Container image
 **Decision.**
-- GitHub Actions runs `mvn verify` first. The `Dockerfile` then copies the tested JAR onto a Java 21 JRE base image.
+- CI (`ci.yml`) runs `mvn verify` and a test `docker build` on every change; CD (`build-and-push.yml`) builds and pushes the image only after CI passes on `main`. The `Dockerfile` builds the JAR in a Maven stage and copies it onto a Java 21 JRE base image.
 - The container runs as a non-root user, with `-XX:MaxRAMPercentage=75`, and exposes 8080.
 - ECR scans every image on push. A lifecycle rule keeps the last 15 `sha-*` images.
 

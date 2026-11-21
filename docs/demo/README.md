@@ -14,7 +14,7 @@ Order matters: the service can't start until an image exists ([D3](../decisions/
    - When it finishes, copy the output `GitHubActionsRoleArn`.
 4. **First image.**
    - In `week-3-lab-2-orders-app` on GitHub, open *Settings → Secrets and variables → Actions → Variables*. Add `AWS_ROLE_ARN` (the ARN from step 3) and `AWS_REGION=eu-west-1`. These are variables, not secrets: neither is a credential.
-   - Run *Actions → Build and push image → Run workflow* on `main`. ECR now holds `sha-<commit>` and `latest`.
+   - Run *Actions → Build and push image → Run workflow* on `main` (CD can be started by hand for this first image; after that it runs by itself whenever CI passes on `main`). ECR now holds `sha-<commit>` and `latest`.
 5. **Network, service and pipeline stacks.** *Sync from Git* again, once per stack, in this order and with the same role. Each waits for the one before:
    - `onward-dev-network`, deployment file `infrastructure/deployments/dev/2-network.yaml` (about 3 minutes).
    - `onward-dev-service`, deployment file `infrastructure/deployments/dev/3-service.yaml` (about 5 minutes). Its output `ApplicationUrl` is the site.
@@ -172,7 +172,7 @@ Walk through, in this order:
 1. The two repository READMEs.
 2. The [architecture page](../architecture/README.md): repositories and stacks, then the VPC, the request flow, the release flow and rollback.
 3. The templates in deployment order: `2-network.yaml`, `3-service.yaml`, `4-pipeline.yaml`.
-4. `build-and-push.yml`.
+4. The app repository's `ci.yml` (CI: checks every change) and `build-and-push.yml` (CD: runs only after CI passes on `main`).
 
 ## 8. What it costs, including the private connectivity, and which alternatives were rejected
 
