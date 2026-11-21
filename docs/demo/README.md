@@ -5,7 +5,7 @@
 Order matters: the service can't start until an image exists ([D3](../decisions/README.md#d3-layered-stacks-registry-first)).
 
 1. **Bootstrap Git sync.** Go to *CloudFormation → Create stack → With new resources*.
-   - Upload `infrastructure/templates/0-gitsync-bootstrap.yaml` and name the stack `onward-dev-gitsync-bootstrap`.
+   - Upload `infrastructure/bootstrap/gitsync-bootstrap.yaml` and name the stack `onward-dev-gitsync-bootstrap`.
    - Acknowledge the IAM capability and create the stack. It creates the connection `onward-dev-github` and the role `onward-dev-gitsync-role`.
 2. **Approve the connection.** Go to *Developer Tools → Settings → Connections → onward-dev-github → Update pending connection*. Authorize the GitHub app for **both** repositories. The status becomes *Available*.
 3. **Registry stack.** Go to *CloudFormation → Create stack → Sync from Git*.

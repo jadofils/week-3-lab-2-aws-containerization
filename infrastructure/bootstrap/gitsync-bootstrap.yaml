@@ -5,6 +5,11 @@ Description: >
   CloudFormation Git sync uses to deploy the registry, network, service and pipeline stacks.
   Nothing here runs the application.
 
+# Why this file is in infrastructure/bootstrap/ and not in infrastructure/templates/:
+# it sets up the deployment tool, not the application. Git sync cannot deploy it, because it
+# creates the GitHub connection and the role that Git sync itself needs. Upload it once in the
+# CloudFormation console; it has no deployment file. Everything in templates/ is deployed by Git sync.
+
 Parameters:
   Project:
     Type: String

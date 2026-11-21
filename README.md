@@ -29,8 +29,9 @@ The brief requires application code and infrastructure code in separate reposito
 
 ```text
 infrastructure/
-├── templates/                 what each stack creates
-│   ├── 0-gitsync-bootstrap.yaml one-time Git sync setup (uploaded once)
+├── bootstrap/                 sets up the deployment tool: uploaded once by hand, NOT deployed by Git sync
+│   └── gitsync-bootstrap.yaml   GitHub connection + Git sync role → stack onward-dev-gitsync-bootstrap
+├── templates/                 the application's infrastructure, deployed by Git sync
 │   ├── 1-registry.yaml          ECR repository + GitHub OIDC role
 │   ├── 2-network.yaml           VPC, subnets, routes, VPC endpoints, all security groups
 │   ├── 3-service.yaml           ALB with blue/green target groups, ECS, task roles, scaling, budget
@@ -42,7 +43,7 @@ infrastructure/
     └── 4-pipeline.yaml          → stack onward-dev-pipeline
 ```
 
-Git sync links each stack to exactly one deployment file, so there is one per stack. Stacks share values through CloudFormation exports named `onward-dev-<stack>-<value>`. Create them in the order above and delete them in reverse.
+The bootstrap is kept apart because it has a different owner and lifecycle: it creates the GitHub connection and role that Git sync itself needs, so Git sync cannot deploy it. Git sync links each other stack to exactly one deployment file, so there is one per stack. Stacks share values through CloudFormation exports named `onward-dev-<stack>-<value>`. Create them in the order above and delete them in reverse.
 
 Start with the [architecture](docs/architecture/README.md), then read the templates in deployment order: `2-network.yaml` → `3-service.yaml` → `4-pipeline.yaml`. Each keeps the numbered sections (1–7) of the design.
 

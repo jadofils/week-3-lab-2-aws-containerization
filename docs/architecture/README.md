@@ -13,7 +13,7 @@ The same design as an editable diagram: [`architecture.drawio`](architecture.dra
 
 | Stack | Template → deployment file | What it creates | Why it is separate |
 | --- | --- | --- | --- |
-| `onward-dev-gitsync-bootstrap` | `infrastructure/templates/0-gitsync-bootstrap.yaml` (console upload, once) | GitHub connection, Git sync role | Git sync cannot create the connection it depends on. |
+| `onward-dev-gitsync-bootstrap` | `infrastructure/bootstrap/gitsync-bootstrap.yaml` (console upload, once; no deployment file) | GitHub connection, Git sync role | Git sync cannot create the connection it depends on. |
 | `onward-dev-registry` | `templates/1-registry.yaml` → `deployments/dev/1-registry.yaml` | ECR repository, GitHub OIDC provider, GitHub Actions role and push policy | An image must exist before ECS can start a service ([D3](../decisions/README.md#d3-layered-stacks-registry-first)). |
 | `onward-dev-network` | `templates/2-network.yaml` → `deployments/dev/2-network.yaml` | VPC, subnets, route tables (private: no internet route), VPC endpoints, all security groups | Changes rarely; every traffic rule is readable in one file. |
 | `onward-dev-service` | `templates/3-service.yaml` → `deployments/dev/3-service.yaml` | Task roles, ALB, blue/green target groups, listener, ECS cluster, task definition, service, auto scaling, budget | What customers reach and what runs. |

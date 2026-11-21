@@ -40,12 +40,12 @@ jobs:
       - name: cfn-lint
         run: |
           pip install --quiet cfn-lint
-          cfn-lint --regions eu-west-1 -- infrastructure/templates/*.yaml
+          cfn-lint --regions eu-west-1 -- infrastructure/bootstrap/*.yaml infrastructure/templates/*.yaml
 
       # Company standard: permissions live in customer managed policies, never inline.
       - name: No inline IAM policies
         run: |
-          if grep -rnE '^\s+Policies:|Type:\s*AWS::IAM::Policy\s*$' infrastructure/templates; then
+          if grep -rnE '^\s+Policies:|Type:\s*AWS::IAM::Policy\s*$' infrastructure/bootstrap infrastructure/templates; then
             echo "::error::Inline IAM policy found. Use AWS::IAM::ManagedPolicy and ManagedPolicyArns."
             exit 1
           fi
@@ -54,7 +54,7 @@ jobs:
       # No access keys may be created for anyone: the setup is keyless.
       - name: No IAM users or access keys
         run: |
-          if grep -rnE 'Type:\s*AWS::IAM::(User|AccessKey)\s*$' infrastructure/templates; then
+          if grep -rnE 'Type:\s*AWS::IAM::(User|AccessKey)\s*$' infrastructure/bootstrap infrastructure/templates; then
             echo "::error::IAM users or access keys found. Use roles (OIDC, service principals)."
             exit 1
           fi
