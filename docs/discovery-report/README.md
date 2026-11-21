@@ -76,7 +76,7 @@ This suits Onward better than rolling updates because customers never see a half
 | VPC endpoints (`ecr.api`, `ecr.dkr`, `logs` interface; `s3` gateway) | Private connectivity from containers to the AWS services they need. | Meets "no path to the internet": traffic stays on AWS's network, and unlike a NAT gateway it gives the app no route to the internet. |
 | GitHub Actions + IAM OIDC identity provider | Tests, builds and pushes the image, and signs in to AWS with a short-lived token. | No AWS keys stored in GitHub. The role trusts only the `main` branch of the application repository and may only push to one ECR repository. |
 | Amazon EventBridge | Turns "a new `latest` image was pushed" into "start the pipeline". | Required by the brief. It decouples the app repository from the pipeline: GitHub needs no permission on CodePipeline. |
-| AWS CodePipeline (V2) + AWS CodeBuild | Takes the new image, prepares the deployment files, and hands them to CodeDeploy. | Every release is recorded, and stage rollback redeploys the last good release. V2 is billed per minute, so an idle pipeline costs nothing. |
+| AWS CodePipeline (V2) + Amazon S3 | Reads the new image from ECR and the deployment bundle (`taskdef.json` + `appspec.yaml`) from S3, and hands them to CodeDeploy. | Every release is recorded, and stage rollback redeploys the last good release. V2 is billed per minute, so an idle pipeline costs nothing. |
 | AWS CodeDeploy (ECS blue/green) | Starts green, shifts traffic 10% then 100%, rolls back on alarm, and keeps blue for 15 minutes. | Required by the brief, and it is what makes releases safe and reversible. Free for ECS. |
 | Application Auto Scaling | Keeps 2–6 containers, targets 50% average CPU, and stops `dev` containers outside working hours. | Grows on busy days and shrinks afterwards with no one adjusting anything. Idle `dev` time costs nothing for compute. |
 | Amazon CloudWatch | Container logs (14-day retention), CPU metrics for scaling, and the 5xx alarm that triggers rollback. | Gives the evidence for every check, and turns "errors are rising" into an automatic rollback. |
@@ -93,7 +93,7 @@ All figures come from the [AWS Pricing Calculator estimate](https://calculator.a
 | AWS Fargate | 2 tasks, 1 vCPU / 2 GB each, 9.3 hours a day (`dev` off outside working hours) | 27.93 |
 | Elastic Load Balancing | 1 Application Load Balancer | 24.24 |
 | Amazon CloudWatch | Logs and alarms | 2.33 |
-| AWS CodeBuild | Prepare step | 0.90 |
+| AWS CodeBuild | No longer used (replaced by the S3 deployment bundle); still in the estimate | 0.90 |
 | Amazon ECR | 3 GB of images | 0.30 |
 | AWS CodePipeline | V2, 224 action-minutes | 0.25 |
 | Amazon S3 | Artifact bucket, 0.01 GB | 0.00 |

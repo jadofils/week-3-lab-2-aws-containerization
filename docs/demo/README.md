@@ -124,9 +124,9 @@ while true; do curl -s -m 3 -o /dev/null -w "%{http_code} " "$URL/health"; sleep
   ```bash
   aws iam list-users --query "Users[].UserName"   # then: aws iam list-access-keys --user-name <name> for any listed
   ```
-- **Pipeline, build, deployment, EventBridge and Git sync** each run under their own IAM role. There are no inline policies:
+- **Pipeline, deployment, EventBridge and Git sync** each run under their own IAM role. There are no inline policies:
   ```bash
-  for r in onward-dev-github-actions-role onward-dev-orders-pipeline-role onward-dev-orders-prepare-role \
+  for r in onward-dev-github-actions-role onward-dev-orders-pipeline-role \
            onward-dev-orders-codedeploy-role onward-dev-orders-events-role onward-dev-orders-task-execution-role; do
     echo "$r inline: $(aws iam list-role-policies --role-name $r --query 'length(PolicyNames)')"; done
   ```

@@ -32,10 +32,10 @@ infrastructure/
 ├── bootstrap/                 sets up the deployment tool: uploaded once by hand, NOT deployed by Git sync
 │   └── gitsync-bootstrap.yaml   GitHub connection + Git sync role → stack onward-dev-gitsync-bootstrap
 ├── templates/                 the application's infrastructure, deployed by Git sync
-│   ├── 1-registry.yaml          ECR repository + GitHub OIDC role
+│   ├── 1-registry.yaml          ECR repository, deployment bundle bucket, GitHub OIDC role
 │   ├── 2-network.yaml           VPC, subnets, routes, VPC endpoints, all security groups
 │   ├── 3-service.yaml           ALB with blue/green target groups, ECS, task roles, scaling, budget
-│   └── 4-pipeline.yaml          EventBridge rule, CodePipeline, CodeBuild Prepare, CodeDeploy, rollback alarm
+│   └── 4-pipeline.yaml          EventBridge rule, CodePipeline (ECR + S3 bundle sources), CodeDeploy, rollback alarm
 └── deployments/dev/           one Git sync deployment file per stack: template + parameters + tags
     ├── 1-registry.yaml          → stack onward-dev-registry
     ├── 2-network.yaml           → stack onward-dev-network

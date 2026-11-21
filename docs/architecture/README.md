@@ -17,7 +17,7 @@ The same design as an editable diagram: [`architecture.drawio`](architecture.dra
 | `onward-dev-registry` | `templates/1-registry.yaml` → `deployments/dev/1-registry.yaml` | ECR repository, GitHub OIDC provider, GitHub Actions role and push policy | An image must exist before ECS can start a service ([D3](../decisions/README.md#d3-layered-stacks-registry-first)). |
 | `onward-dev-network` | `templates/2-network.yaml` → `deployments/dev/2-network.yaml` | VPC, subnets, route tables (private: no internet route), VPC endpoints, all security groups | Changes rarely; every traffic rule is readable in one file. |
 | `onward-dev-service` | `templates/3-service.yaml` → `deployments/dev/3-service.yaml` | Task roles, ALB, blue/green target groups, listener, ECS cluster, task definition, service, auto scaling, budget | What customers reach and what runs. |
-| `onward-dev-pipeline` | `templates/4-pipeline.yaml` → `deployments/dev/4-pipeline.yaml` | 5xx rollback alarm, artifact bucket, CodeDeploy, CodeBuild Prepare, CodePipeline, EventBridge rule | Release machinery; can change or be rebuilt without touching the network or the service. |
+| `onward-dev-pipeline` | `templates/4-pipeline.yaml` → `deployments/dev/4-pipeline.yaml` | 5xx rollback alarm, artifact bucket, CodeDeploy, CodePipeline, EventBridge rule | Release machinery; can change or be rebuilt without touching the network or the service. |
 
 Paths are under `infrastructure/`. The design keeps its numbered sections across the stacks: **1 Network + 2 Private connectivity + 3 Security groups** (`network`) → **task identities + 4 Load balancer + 5 Service and scaling + 7 Cost guardrail** (`service`) → **6 Release pipeline** (`pipeline`).
 
@@ -114,7 +114,7 @@ flowchart LR
   ecr -->|"ECR Image Action: PUSH SUCCESS, tag latest"| eb["EventBridge rule<br/>onward-dev-orders-image-pushed"]
   eb -->|StartPipelineExecution| src
   subgraph cp["CodePipeline V2 · onward-dev-orders-pipeline"]
-    src["1 Source<br/>ECR action → imageDetail.json<br/>(image digest)"] --> prep["2 Prepare<br/>CodeBuild: taskdef.json + appspec.yaml"] --> dep["3 Deploy<br/>CodeDeploy ECS blue/green"]
+    src["1 Source<br/>ECR → imageDetail.json (image digest)<br/>S3 → deploy-bundle.zip (taskdef.json + appspec.yaml)"] --> dep["2 Deploy<br/>CodeDeploy ECS blue/green"]
   end
   dep --> green["Green tasks start<br/>and pass /health"] --> shift["10% of traffic for 5 min<br/>5xx alarm watching"] --> all["100% to green"] --> wait["Blue kept for 15 min<br/>(instant rollback window)"] --> done["Blue stopped"]
   shift -. alarm .-> rb["Automatic rollback<br/>traffic back to blue"]
@@ -126,15 +126,14 @@ Step by step:
 2. **Push.**
    - GitHub issues a short-lived OIDC token. AWS exchanges it for temporary credentials on `onward-dev-github-actions-role`.
    - The role trusts only `repo:jadofils@114186160/week-3-lab-2-orders-app@1460005073:ref:refs/heads/main` (GitHub's immutable subject: owner and repository names with their permanent numeric IDs).
-   - The job pushes the image tagged `sha-<commit>` (immutable) and moves `latest` to it.
+   - The job pushes the image tagged `sha-<commit>` (immutable).
+   - It zips `deploy/taskdef.json` and `deploy/appspec.yaml` from the application repository into `deploy-bundle.zip` and uploads it to the bundle bucket `onward-dev-orders-deploy-bundle-<account-id>`.
+   - Last, it moves `latest` to the new image.
 3. **Trigger.** ECR emits an *ECR Image Action* event. The EventBridge rule matches pushes of `latest` to `onward-dev-orders` and starts the pipeline through its own role.
-4. **Source.** The ECR source action writes `imageDetail.json`. It contains the image **digest**, so the release is pinned even though `latest` will move later.
-5. **Prepare.** A small CodeBuild project:
-   - reads the latest registered revision of the task definition family `onward-dev-orders`;
-   - sets its image to the `<IMAGE1_NAME>` placeholder and writes `taskdef.json`;
-   - writes `appspec.yaml` (container `orders`, port 8080).
-   CloudFormation therefore stays the owner of task size, roles and logging ([D8](../decisions/README.md#d8-the-pipeline-copies-the-task-definition-cloudformation-registered)).
-6. **Deploy.** CodeDeploy registers a new task definition revision with the new digest and starts a green task set behind the idle target group. It shifts traffic with `CodeDeployDefault.ECSCanary10Percent5Minutes`, then stops blue 15 minutes later.
+4. **Source.** Two source actions run together:
+   - **ECR** writes `imageDetail.json`. It contains the image **digest**, so the release is pinned even though `latest` will move later.
+   - **S3** reads `deploy-bundle.zip`, the deployment files uploaded just before `latest` was pushed ([D8](../decisions/README.md#d8-deployment-files-live-in-the-app-repository-and-reach-the-pipeline-as-an-s3-bundle)).
+5. **Deploy.** CodeDeploy registers a new task definition revision with the new digest and starts a green task set behind the idle target group. It shifts traffic with `CodeDeployDefault.ECSCanary10Percent5Minutes`, then stops blue 15 minutes later.
 
 ## 5. How a bad release is reversed
 
@@ -177,7 +176,7 @@ All names follow `onward-<environment>-<purpose>`. All resources carry the `Proj
 | ECS cluster / service / task family / container | `onward-dev-orders-cluster` / `onward-dev-orders-service` / `onward-dev-orders` / `orders` |
 | Log group | `/onward/dev/orders` |
 | CodeDeploy application / deployment group | `onward-dev-orders-deploy` / `onward-dev-orders-dg` |
-| CodeBuild project | `onward-dev-orders-prepare` |
+| Deployment bundle bucket | `onward-dev-orders-deploy-bundle-<account-id>` (key `deploy/deploy-bundle.zip`) |
 | CodePipeline / artifact bucket | `onward-dev-orders-pipeline` / `onward-dev-orders-artifacts-<account-id>` |
 | EventBridge rule | `onward-dev-orders-image-pushed` |
 | Rollback alarm | `onward-dev-orders-5xx-alarm` |

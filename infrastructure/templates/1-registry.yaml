@@ -5,7 +5,7 @@ Description: >
   push to it. Created before the order system stack, because ECS cannot start a service
   until an image exists. Deployed by CloudFormation Git sync from infrastructure/deployments/dev/1-registry.yaml.
 
-# Reading order: Parameters -> 1 Image registry -> 2 Keyless access for GitHub Actions -> Outputs
+# Reading order: Parameters -> 1 Image registry and deployment bundle bucket -> 2 Keyless access for GitHub Actions -> Outputs
 #
 # No long-lived credentials: GitHub receives a short-lived OIDC token per workflow run and
 # exchanges it for temporary credentials on one role that trusts only the main branch of the
@@ -68,7 +68,7 @@ Conditions:
     - 'true'
 
 Resources:
-  # ============================================================ 1. Image registry
+  # ============================================================ 1. Image registry and deployment bundle bucket
   # Every tag is immutable except "latest", which marks the release the pipeline follows.
   # Releases are deployed by image digest, so moving "latest" never changes a running version.
   OrdersRepository:
@@ -110,6 +110,60 @@ Resources:
           Value: !Ref Owner
         - Key: Environment
           Value: !Ref Environment
+
+  # This bucket holds the deployment bundle (deploy-bundle.zip = taskdef.json + appspec.yaml) that the app
+  # repository's CD workflow uploads on every release, next to the image it pushes to ECR. Versioning is on because CodePipeline reads an S3 source
+  # by version; the current bundle is kept, and replaced versions are deleted after 30 days.
+  DeployBundleBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${Project}-${Environment}-orders-deploy-bundle-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-replaced-bundles
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Environment
+          Value: !Ref Environment
+
+  # This bucket policy refuses every request to the deployment bundle bucket that does not use HTTPS.
+  DeployBundleBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DeployBundleBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt DeployBundleBucket.Arn
+              - !Sub '${DeployBundleBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
 
   # ============================================================ 2. Keyless access for GitHub Actions
   # GitHub's OIDC issuer. AWS validates its tokens against GitHub's published keys, so no
@@ -155,6 +209,20 @@ Resources:
               - ecr:UploadLayerPart
             Resource: !GetAtt OrdersRepository.Arn
 
+  # Upload the deployment bundle (taskdef.json + appspec.yaml) and nothing else: one object key.
+  DeployBundleUploadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${Project}-${Environment}-deploy-bundle-upload-policy'
+      Description: Lets the application build upload the deployment bundle and nothing else.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: UploadDeploymentBundle
+            Effect: Allow
+            Action: s3:PutObject
+            Resource: !Sub '${DeployBundleBucket.Arn}/deploy/deploy-bundle.zip'
+
   # Trusts only workflow runs on the main branch of the application repository.
   # Pull requests, other branches and other repositories cannot assume it.
   GitHubActionsRole:
@@ -179,6 +247,7 @@ Resources:
                 token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/${AppRepository}@${AppRepositoryId}:ref:refs/heads/main'
       ManagedPolicyArns:
         - !Ref EcrPushPolicy
+        - !Ref DeployBundleUploadPolicy
       Tags:
         - Key: Project
           Value: !Ref Project
@@ -201,6 +270,15 @@ Outputs:
     Value: !GetAtt OrdersRepository.Arn
     Export:
       Name: !Sub '${Project}-${Environment}-orders-repository-arn'
+  DeployBundleBucketName:
+    Description: Where the app's CD workflow uploads deploy/deploy-bundle.zip. Delete all object versions before deleting the stack.
+    Value: !Ref DeployBundleBucket
+    Export:
+      Name: !Sub '${Project}-${Environment}-deploy-bundle-bucket-name'
+  DeployBundleBucketArn:
+    Value: !GetAtt DeployBundleBucket.Arn
+    Export:
+      Name: !Sub '${Project}-${Environment}-deploy-bundle-bucket-arn'
   GitHubActionsRoleArn:
     Description: Set as the AWS_ROLE_ARN variable (not a secret) in the application repository.
     Value: !GetAtt GitHubActionsRole.Arn

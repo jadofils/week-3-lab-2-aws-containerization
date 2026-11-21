@@ -311,10 +311,9 @@ Resources:
           Value: !Ref Environment
 
   # This task definition is the recipe for one container: image, CPU and memory, port, environment and logging.
-  # CloudFormation owns the shape of the task: size, roles, port, logging and environment.
-  # Each release copies the latest revision of this family and only swaps the image
-  # (section 6, Prepare). Changing a property here registers a new revision, which the next
-  # release picks up.
+  # This revision is used once, when the service is first created. Every release after that registers a
+  # new revision from deploy/taskdef.json in the application repository (sent to the pipeline as the S3
+  # deployment bundle). Keep CPU, memory, roles, port and logging the same in both places.
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:

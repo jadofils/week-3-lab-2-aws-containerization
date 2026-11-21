@@ -11,7 +11,6 @@ parameters:
   # Releases: 10% of customers for 5 minutes, then everyone; old version kept 15 minutes.
   DeploymentConfigName: CodeDeployDefault.ECSCanary10Percent5Minutes
   BlueRetentionMinutes: '15'
-  LogRetentionDays: '14'
 
 tags:
   Project: onward

@@ -1,13 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Onward Logistics - Lab 2 release pipeline: a new image tagged latest in ECR fires EventBridge,
-  which starts CodePipeline (Source -> Prepare -> Deploy). CodeDeploy releases it blue/green with
+  which starts CodePipeline (Source: image from ECR + deployment bundle from S3 -> Deploy). CodeDeploy releases it blue/green with
   a 10% canary and rolls back automatically on errors.
   Deployed by CloudFormation Git sync from infrastructure/deployments/dev/4-pipeline.yaml.
 
 # Stack 3 of 3: network -> service -> pipeline.
-# Imports the ECS service, listener, target groups and task roles (service stack) and the image
-# repository (registry stack).
+# Imports the ECS service, listener, target groups and task roles (service stack), and the image
+# repository and deployment bundle bucket (registry stack).
 # Reading order: Parameters -> 6 Release pipeline -> Outputs
 
 # These are the settings of this stack. The values for dev are set in infrastructure/deployments/dev/4-pipeline.yaml.
@@ -27,10 +27,6 @@ Parameters:
       - test
       - prod
 
-  ApplicationPort:
-    Type: Number
-    Default: 8080
-
   DeploymentConfigName:
     Type: String
     Default: CodeDeployDefault.ECSCanary10Percent5Minutes
@@ -48,18 +44,9 @@ Parameters:
     MaxValue: 120
     Description: Old (blue) tasks keep running this long after a release, so a rollback is only a traffic switch.
 
-  LogRetentionDays:
-    Type: Number
-    Default: 14
-    AllowedValues:
-      - 7
-      - 14
-      - 30
-      - 90
-
 Resources:
   # ============================================================ 6. Release pipeline
-  # ECR push (latest) -> EventBridge -> CodePipeline: Source -> Prepare -> Deploy (CodeDeploy blue/green)
+  # ECR push (latest) -> EventBridge -> CodePipeline: Source (ECR image + S3 bundle) -> Deploy (CodeDeploy blue/green)
 
   # This alarm counts server errors (HTTP 5xx) returned by the order tasks. Five or more in one minute
   # puts it in ALARM, and CodeDeploy then stops the release and sends traffic back to the old version.
@@ -226,153 +213,14 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # --- Prepare: turn the latest task definition revision into the files CodeDeploy needs
-  # This log group stores the output of the Prepare step, so you can see what it did, for 14 days.
-  PrepareLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/${Project}/${Environment}/orders-prepare'
-      RetentionInDays: !Ref LogRetentionDays
-      Tags:
-        - Key: Project
-          Value: !Ref Project
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Environment
-          Value: !Ref Environment
-
-  # This policy lists the only things the Prepare step may do: read the task definition,
-  # read and write files in the artifact bucket, and write its own logs.
-  PreparePolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub '${Project}-${Environment}-orders-prepare-policy'
-      Description: Read the order task definition, use the artifact bucket and write build logs.
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: ReadTaskDefinition
-            Effect: Allow
-            Action: ecs:DescribeTaskDefinition
-            Resource: '*'
-          - Sid: PipelineArtifacts
-            Effect: Allow
-            Action:
-              - s3:GetObject
-              - s3:GetObjectVersion
-              - s3:PutObject
-            Resource: !Sub '${ArtifactBucket.Arn}/*'
-          - Sid: BuildLogs
-            Effect: Allow
-            Action:
-              - logs:CreateLogStream
-              - logs:PutLogEvents
-            Resource: !Sub '${PrepareLogGroup.Arn}:*'
-
-  # This role is the identity of the Prepare step. Only CodeBuild can use it, and it has only the Prepare policy.
-  PrepareRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${Project}-${Environment}-orders-prepare-role'
-      Description: Used by the CodeBuild project that prepares each release for CodeDeploy.
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: codebuild.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - !Ref PreparePolicy
-      Tags:
-        - Key: Project
-          Value: !Ref Project
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Environment
-          Value: !Ref Environment
-
-  # This CodeBuild project is the Prepare step. It writes the two files CodeDeploy needs for each release:
-  # taskdef.json (the container recipe with a placeholder for the new image) and appspec.yaml (which container and port).
-  # Copies the latest registered revision of the task family (CloudFormation's settings, or the
-  # last release), replaces the image with <IMAGE1_NAME> for CodeDeploy to fill with the new
-  # image digest, and writes the appspec that names the container and port.
-  PrepareProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub '${Project}-${Environment}-orders-prepare'
-      Description: Writes taskdef.json and appspec.yaml for the CodeDeploy blue/green action.
-      ServiceRole: !GetAtt PrepareRole.Arn
-      TimeoutInMinutes: 10
-      Artifacts:
-        Type: CODEPIPELINE
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
-        EnvironmentVariables:
-          - Name: TASK_FAMILY
-            Value: !Sub '${Project}-${Environment}-orders'
-          - Name: CONTAINER_NAME
-            Value: orders
-          - Name: CONTAINER_PORT
-            Value: !Ref ApplicationPort
-      LogsConfig:
-        CloudWatchLogs:
-          Status: ENABLED
-          GroupName: !Ref PrepareLogGroup
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query taskDefinition > current.json
-                - |
-                  python3 - <<'PY'
-                  import json, os
-                  td = json.load(open("current.json"))
-                  for key in ("taskDefinitionArn", "revision", "status", "requiresAttributes",
-                              "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"):
-                      td.pop(key, None)
-                  name = os.environ["CONTAINER_NAME"]
-                  for container in td["containerDefinitions"]:
-                      if container["name"] == name:
-                          container["image"] = "<IMAGE1_NAME>"
-                  json.dump(td, open("taskdef.json", "w"), indent=2)
-                  open("appspec.yaml", "w").write(
-                      "version: 0.0\n"
-                      "Resources:\n"
-                      "  - TargetService:\n"
-                      "      Type: AWS::ECS::Service\n"
-                      "      Properties:\n"
-                      "        TaskDefinition: <TASK_DEFINITION>\n"
-                      "        LoadBalancerInfo:\n"
-                      f"          ContainerName: \"{name}\"\n"
-                      f"          ContainerPort: {os.environ['CONTAINER_PORT']}\n")
-                  PY
-                - cat taskdef.json appspec.yaml
-          artifacts:
-            files:
-              - taskdef.json
-              - appspec.yaml
-      Tags:
-        - Key: Project
-          Value: !Ref Project
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Environment
-          Value: !Ref Environment
-
   # --- CodePipeline (V2: billed per action-minute, supports stage rollback)
-  # This policy lists the only things the pipeline may do: use the artifact bucket, read the pushed image,
-  # run the Prepare step, start a CodeDeploy release, register the new task definition and hand the task roles to ECS.
+  # This policy lists the only things the pipeline may do: use the artifact bucket, read the pushed image and the
+  # deployment bundle, start a CodeDeploy release, register the new task definition and hand the task roles to ECS.
   PipelinePolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       ManagedPolicyName: !Sub '${Project}-${Environment}-orders-pipeline-policy'
-      Description: Run the order release pipeline - read the image, run Prepare, deploy with CodeDeploy.
+      Description: Run the order release pipeline - read the image and the deployment bundle, deploy with CodeDeploy.
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -392,12 +240,19 @@ Resources:
             Action: ecr:DescribeImages
             Resource: !ImportValue
               Fn::Sub: '${Project}-${Environment}-orders-repository-arn'
-          - Sid: RunPrepare
+          - Sid: ReadDeploymentBundle
             Effect: Allow
             Action:
-              - codebuild:StartBuild
-              - codebuild:BatchGetBuilds
-            Resource: !GetAtt PrepareProject.Arn
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:GetBucketVersioning
+            Resource:
+              - !ImportValue
+                Fn::Sub: '${Project}-${Environment}-deploy-bundle-bucket-arn'
+              - !Sub
+                - '${BucketArn}/deploy/deploy-bundle.zip'
+                - BucketArn: !ImportValue
+                    Fn::Sub: '${Project}-${Environment}-deploy-bundle-bucket-arn'
           - Sid: DeployWithCodeDeploy
             Effect: Allow
             Action:
@@ -451,7 +306,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # This pipeline runs every release in three stages: Source (which image) -> Prepare (deployment files)
+  # This pipeline runs every release in two stages: Source (the image from ECR and the deployment bundle from S3)
   # -> Deploy (CodeDeploy blue/green). It keeps a history of every release, which is used for rollback.
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -463,8 +318,11 @@ Resources:
         Type: S3
         Location: !Ref ArtifactBucket
       Stages:
-        # 1. The image that was pushed. imageDetail.json carries its digest, so the release is
-        #    pinned even if "latest" moves while it runs.
+        # 1. Two sources, read together when EventBridge starts the pipeline:
+        #    - Image: the pushed image. imageDetail.json carries its digest, so the release is pinned
+        #      even if "latest" moves while it runs.
+        #    - DeployBundle: deploy-bundle.zip (taskdef.json + appspec.yaml) uploaded by the app's CD
+        #      workflow just before it pushed "latest". Not polled: only the image push starts a release.
         - Name: Source
           Actions:
             - Name: Image
@@ -479,22 +337,20 @@ Resources:
                 ImageTag: latest
               OutputArtifacts:
                 - Name: ImageArtifact
-        # 2. taskdef.json + appspec.yaml from the latest task definition revision.
-        - Name: Prepare
-          Actions:
-            - Name: RenderDeploymentFiles
+            - Name: DeployBundle
               ActionTypeId:
-                Category: Build
+                Category: Source
                 Owner: AWS
-                Provider: CodeBuild
+                Provider: S3
                 Version: '1'
               Configuration:
-                ProjectName: !Ref PrepareProject
-              InputArtifacts:
-                - Name: ImageArtifact
+                S3Bucket: !ImportValue
+                  Fn::Sub: '${Project}-${Environment}-deploy-bundle-bucket-name'
+                S3ObjectKey: deploy/deploy-bundle.zip
+                PollForSourceChanges: 'false'
               OutputArtifacts:
                 - Name: DeployArtifact
-        # 3. Blue/green release. To undo a release after blue is gone, use
+        # 2. Blue/green release. To undo a release after blue is gone, use
         #    "Start rollback" on this stage and pick the last good execution.
         - Name: Deploy
           Actions:
