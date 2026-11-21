@@ -216,10 +216,12 @@ Resources:
   # --- CodePipeline (V2: billed per action-minute, supports stage rollback)
   # This policy lists the only things the pipeline may do: use the artifact bucket, read the pushed image and the
   # deployment bundle, start a CodeDeploy release, register the new task definition and hand the task roles to ECS.
+  # Changing a managed policy's description replaces it, so it carries a new name: the replacement is
+  # created before the old policy (onward-dev-orders-pipeline-policy) is deleted, and names must be unique.
   PipelinePolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub '${Project}-${Environment}-orders-pipeline-policy'
+      ManagedPolicyName: !Sub '${Project}-${Environment}-orders-release-policy'
       Description: Run the order release pipeline - read the image and the deployment bundle, deploy with CodeDeploy.
       PolicyDocument:
         Version: '2012-10-17'
