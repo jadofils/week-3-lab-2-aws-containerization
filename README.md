@@ -49,7 +49,12 @@ Start with the [architecture](docs/architecture/README.md), then read the templa
 
 ## Diagram
 
-[`docs/architecture/architecture.drawio`](docs/architecture/architecture.drawio): the VPC, the delivery pipeline and how a change flows. [Open it in diagrams.net](https://app.diagrams.net/#Hjadofils%2Fweek-3-lab-2-aws-containerization%2Fmain%2Fdocs%2Farchitecture%2Farchitecture.drawio).
+[`docs/architecture/architecture.drawio`](docs/architecture/architecture.drawio): the VPC, the delivery pipeline and how a change flows, drawn with the official AWS architecture icons.
+
+![Resources inside the VPC](docs/architecture/architecture-1.png)
+
+![Delivery pipeline and how a change flows](docs/architecture/architecture-2.png)
+ [Open it in diagrams.net](https://app.diagrams.net/#Hjadofils%2Fweek-3-lab-2-aws-containerization%2Fmain%2Fdocs%2Farchitecture%2Farchitecture.drawio).
 
 ## Docs
 

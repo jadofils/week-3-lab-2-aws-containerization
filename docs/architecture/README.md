@@ -2,7 +2,11 @@
 
 Region `eu-west-1`, environment `dev`. Read this page top to bottom: each section answers one question a new engineer will have.
 
-The same design as an editable diagram: [`architecture.drawio`](architecture.drawio), [open in diagrams.net](https://app.diagrams.net/#Hjadofils%2Fweek-3-lab-2-aws-containerization%2Fmain%2Fdocs%2Farchitecture%2Farchitecture.drawio). Page 1 shows the VPC and runtime; page 2 shows the delivery pipeline and how a change flows.
+The same design as an editable diagram: [`architecture.drawio`](architecture.drawio), [open in diagrams.net](https://app.diagrams.net/#Hjadofils%2Fweek-3-lab-2-aws-containerization%2Fmain%2Fdocs%2Farchitecture%2Farchitecture.drawio). Page 1 shows the VPC and runtime; page 2 shows the delivery pipeline and how a change flows. Both use the official AWS architecture icons.
+
+![Page 1: resources inside the VPC](architecture-1.png)
+
+![Page 2: delivery pipeline and how a change flows](architecture-2.png)
 
 ## 1. The two repositories and the stacks
 
