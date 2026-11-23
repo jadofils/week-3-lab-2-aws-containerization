@@ -41,6 +41,12 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # The role Git sync assumes to create and update the stacks.
+  # Only AWS managed policies, no custom ones:
+  #   PowerUserAccess - everything the stacks create except IAM (VPC, ECS, ECR, ELB, CodePipeline,
+  #                     CodeDeploy, EventBridge, S3, CloudWatch, Budgets) and the CloudFormation
+  #                     change sets Git sync runs
+  #   IAMFullAccess   - the stacks create IAM roles (GitHub OIDC role, ECS task roles, pipeline roles)
   GitSyncRole:
     Type: AWS::IAM::Role
     Properties:
@@ -53,13 +59,9 @@ Resources:
             Principal:
               Service: cloudformation.sync.codeconnections.amazonaws.com
             Action: sts:AssumeRole
-      # PowerUserAccess covers VPC, ECS, ECR, load balancing, Application Auto Scaling, CloudWatch,
-      # CodePipeline, CodeBuild, CodeDeploy, EventBridge, S3 and Budgets.
-      # IAM is granted separately below, limited to this project's names.
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/PowerUserAccess'
-        - !Ref GitSyncOperationsPolicy
-        - !Ref GitSyncIamPolicy
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/IAMFullAccess'
       Tags:
         - Key: Project
           Value: !Ref Project
@@ -67,107 +69,6 @@ Resources:
           Value: !Ref Owner
         - Key: Environment
           Value: !Ref Environment
-
-  GitSyncOperationsPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub '${Project}-${Environment}-gitsync-operations'
-      Description: CloudFormation change-set permissions that Git sync needs.
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: SyncToCloudFormation
-            Effect: Allow
-            Action:
-              - cloudformation:CreateChangeSet
-              - cloudformation:DeleteChangeSet
-              - cloudformation:DescribeChangeSet
-              - cloudformation:DescribeStackEvents
-              - cloudformation:DescribeStacks
-              - cloudformation:ExecuteChangeSet
-              - cloudformation:GetTemplate
-              - cloudformation:ListChangeSets
-              - cloudformation:ListStacks
-              - cloudformation:ValidateTemplate
-              - cloudformation:ListExports
-              - cloudformation:ListImports
-            Resource: '*'
-          - Sid: ManagedRules
-            Effect: Allow
-            Action:
-              - events:PutRule
-              - events:PutTargets
-            Resource: '*'
-            Condition:
-              StringEquals:
-                events:ManagedBy: cloudformation.sync.codeconnections.amazonaws.com
-          - Sid: DescribeRule
-            Effect: Allow
-            Action: events:DescribeRule
-            Resource: '*'
-
-  GitSyncIamPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub '${Project}-${Environment}-gitsync-iam'
-      Description: Manage only this project's roles, customer managed policies and the GitHub OIDC provider.
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: ProjectRoles
-            Effect: Allow
-            Action:
-              - iam:CreateRole
-              - iam:DeleteRole
-              - iam:GetRole
-              - iam:UpdateRole
-              - iam:UpdateRoleDescription
-              - iam:UpdateAssumeRolePolicy
-              - iam:TagRole
-              - iam:UntagRole
-              - iam:AttachRolePolicy
-              - iam:DetachRolePolicy
-              - iam:ListAttachedRolePolicies
-              - iam:ListRolePolicies
-              - iam:ListRoleTags
-              - iam:PassRole
-            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-${Environment}-*'
-          - Sid: ProjectManagedPolicies
-            Effect: Allow
-            Action:
-              - iam:CreatePolicy
-              - iam:DeletePolicy
-              - iam:GetPolicy
-              - iam:GetPolicyVersion
-              - iam:CreatePolicyVersion
-              - iam:DeletePolicyVersion
-              - iam:ListPolicyVersions
-              - iam:ListEntitiesForPolicy
-              - iam:TagPolicy
-              - iam:UntagPolicy
-            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${Project}-${Environment}-*'
-          - Sid: GitHubOidcProvider
-            Effect: Allow
-            Action:
-              - iam:CreateOpenIDConnectProvider
-              - iam:DeleteOpenIDConnectProvider
-              - iam:GetOpenIDConnectProvider
-              - iam:TagOpenIDConnectProvider
-              - iam:UntagOpenIDConnectProvider
-              - iam:AddClientIDToOpenIDConnectProvider
-              - iam:RemoveClientIDFromOpenIDConnectProvider
-              - iam:UpdateOpenIDConnectProviderThumbprint
-            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
-          - Sid: ServiceLinkedRoles
-            Effect: Allow
-            Action: iam:CreateServiceLinkedRole
-            Resource: '*'
-            Condition:
-              StringEquals:
-                iam:AWSServiceName:
-                  - ecs.amazonaws.com
-                  - ecs.application-autoscaling.amazonaws.com
-                  - elasticloadbalancing.amazonaws.com
 
 Outputs:
   ConnectionArn:
