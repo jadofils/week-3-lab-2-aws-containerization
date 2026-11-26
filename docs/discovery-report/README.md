@@ -88,19 +88,6 @@ This suits Onward better than rolling updates because customers never see a half
 
 All figures come from the [AWS Pricing Calculator estimate](https://calculator.aws/#/estimate?id=8d91f73244be325f9700d79218809e51f83b0f95): Region `eu-west-1`, On-Demand prices, taxes excluded. The [cost page](../cost/README.md) gives the configuration entered for each service.
 
-| Service | Configuration in the estimate | Monthly (USD) |
-| --- | --- | ---: |
-| AWS Fargate | 2 tasks, 1 vCPU / 2 GB each, 9.3 hours a day (`dev` off outside working hours) | 27.93 |
-| Elastic Load Balancing | 1 Application Load Balancer | 24.24 |
-| Amazon CloudWatch | Logs and alarms | 2.33 |
-| AWS CodeBuild | No longer used (replaced by the S3 deployment bundle); still in the estimate | 0.90 |
-| Amazon ECR | 3 GB of images | 0.30 |
-| AWS CodePipeline | V2, 224 action-minutes | 0.25 |
-| Amazon S3 | Artifact bucket, 0.01 GB | 0.00 |
-| Amazon EventBridge | Image-pushed events | 0.00 |
-| Amazon VPC | Public IPv4, as entered | 0.00 |
-| **Total per month** | | **55.95** |
-| **Total per year** | | **671.40** |
 
 - **Compute and the load balancer are 93% of the cost** (Fargate $27.93, ALB $24.24).
 - **Idle `dev` time costs no compute.** The estimate prices Fargate at 9.3 hours a day because the service stops at 20:00 and starts at 07:00 on weekdays.
